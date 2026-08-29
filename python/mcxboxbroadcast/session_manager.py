@@ -128,9 +128,15 @@ class SessionManager(SessionManagerCore):
     # ------------------------------------------------------------------
     # Session updates
     # ------------------------------------------------------------------
-    def update_session(self, session_info: SessionInfo) -> None:
-        """Update the current session with new information."""
-        self._session_info.update_session_info(session_info)
+    def update_session(self, session_info: Optional[SessionInfo] = None) -> None:
+        """Update the current session with new information.
+
+        The ``session_info`` argument is optional: ``SessionManagerCore`` calls
+        this without arguments after creating the session, while ``__main__.py``
+        passes new player information when it changes.
+        """
+        if session_info is not None:
+            self._session_info.update_session_info(session_info)
         self._update_session()
 
     def _update_session(self) -> None:

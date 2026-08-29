@@ -44,3 +44,21 @@ class XstsToken:
 class MinecraftToken:
     access_token: str
     expires_at: float
+
+
+@dataclass
+class DeviceToken:
+    """XBL device token (from device.auth.xboxlive.com)."""
+
+    token: str
+    expires_at: float
+
+
+@dataclass
+class PlayFabToken:
+    """PlayFab login result (session ticket used for the MC session token)."""
+
+    session_ticket: str
+    entity_token: str
+    playfab_id: str
+    expires_at: float

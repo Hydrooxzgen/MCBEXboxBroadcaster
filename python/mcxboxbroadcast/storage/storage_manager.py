@@ -23,28 +23,16 @@ class PlayerHistoryStorage(ABC):
 
 class StorageManager(ABC):
     @abstractmethod
-    def cache(self) -> str: ...
+    def cache(self, data: Optional[str] = None) -> Optional[str]: ...
 
     @abstractmethod
-    def cache(self, data: str) -> None: ...  # type: ignore[empty-body]
+    def sub_sessions(self, data: Optional[str] = None) -> Optional[str]: ...
 
     @abstractmethod
-    def sub_sessions(self) -> str: ...
+    def last_session_response(self, data: Optional[str] = None) -> Optional[str]: ...
 
     @abstractmethod
-    def sub_sessions(self, data: str) -> None: ...  # type: ignore[empty-body]
-
-    @abstractmethod
-    def last_session_response(self) -> str: ...
-
-    @abstractmethod
-    def last_session_response(self, data: str) -> None: ...  # type: ignore[empty-body]
-
-    @abstractmethod
-    def current_session_response(self) -> str: ...
-
-    @abstractmethod
-    def current_session_response(self, data: str) -> None: ...  # type: ignore[empty-body]
+    def current_session_response(self, data: Optional[str] = None) -> Optional[str]: ...
 
     @abstractmethod
     def sub_session(self, session_id: str) -> "StorageManager": ...

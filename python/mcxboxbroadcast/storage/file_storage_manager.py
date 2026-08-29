@@ -73,31 +73,31 @@ class FileStorageManager(StorageManager):
             handle.write(data)
 
     # -- cache -------------------------------------------------------------
-    def cache(self) -> str:
-        return self._read("cache.json")
-
-    def cache(self, data: str) -> None:  # type: ignore[override]
+    def cache(self, data: Optional[str] = None) -> Optional[str]:
+        if data is None:
+            return self._read("cache.json")
         self._write("cache.json", data)
+        return None
 
     # -- sub sessions ------------------------------------------------------
-    def sub_sessions(self) -> str:
-        return self._read("sub_sessions.json")
-
-    def sub_sessions(self, data: str) -> None:  # type: ignore[override]
+    def sub_sessions(self, data: Optional[str] = None) -> Optional[str]:
+        if data is None:
+            return self._read("sub_sessions.json")
         self._write("sub_sessions.json", data)
+        return None
 
     # -- session responses -------------------------------------------------
-    def last_session_response(self) -> str:
-        return self._read("lastSessionResponse.json")
-
-    def last_session_response(self, data: str) -> None:  # type: ignore[override]
+    def last_session_response(self, data: Optional[str] = None) -> Optional[str]:
+        if data is None:
+            return self._read("lastSessionResponse.json")
         self._write("lastSessionResponse.json", data)
+        return None
 
-    def current_session_response(self) -> str:
-        return self._read("currentSessionResponse.json")
-
-    def current_session_response(self, data: str) -> None:  # type: ignore[override]
+    def current_session_response(self, data: Optional[str] = None) -> Optional[str]:
+        if data is None:
+            return self._read("currentSessionResponse.json")
         self._write("currentSessionResponse.json", data)
+        return None
 
     # -- misc --------------------------------------------------------------
     def sub_session(self, session_id: str) -> "FileStorageManager":

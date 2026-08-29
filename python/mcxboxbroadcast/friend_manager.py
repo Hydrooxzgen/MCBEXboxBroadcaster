@@ -7,6 +7,7 @@ request acceptance, invites and inactivity expiry.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -168,7 +169,7 @@ class FriendManager:
             )
             try:
                 for friend in self.get():
-                    player_history.last_seen(friend.xuid, time.time())
+                    player_history.last_seen(friend.xuid, datetime.now(timezone.utc))
             except Exception as e:
                 self._logger.error(f"Failed to initialize player history: {e}")
         else:
@@ -184,7 +185,7 @@ class FriendManager:
                 # Add any friends that are missing from history
                 for xuid in friend_xuids:
                     if xuid not in history_xuids:
-                        player_history.last_seen(xuid, time.time())
+                        player_history.last_seen(xuid, datetime.now(timezone.utc))
             except Exception as e:
                 self._logger.error(f"Failed to clean up player history: {e}")
 
