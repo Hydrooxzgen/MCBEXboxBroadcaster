@@ -72,8 +72,13 @@ class SessionInfo:
             return 1
         return self._players
 
-    def set_players(self, players: int) -> None:
-        self._players = players
+    def set_players(self, players) -> None:
+        # The ping pong payload carries numeric fields as strings; coerce them
+        # so the comparisons in get_players / get_max_players stay numeric.
+        try:
+            self._players = int(players)
+        except (TypeError, ValueError):
+            self._players = 0
 
     def get_max_players(self) -> int:
         # Prevents the server from showing as full
@@ -81,8 +86,11 @@ class SessionInfo:
             return self.get_players() + 1
         return self._max_players
 
-    def set_max_players(self, max_players: int) -> None:
-        self._max_players = max_players
+    def set_max_players(self, max_players) -> None:
+        try:
+            self._max_players = int(max_players)
+        except (TypeError, ValueError):
+            self._max_players = 20
 
     def get_ip(self) -> str:
         return self._ip
