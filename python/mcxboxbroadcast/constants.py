@@ -14,8 +14,8 @@ from urllib.parse import quote
 # ---------------------------------------------------------------------------
 # The Bedrock protocol version this tool emulates for the NetherNet redirect
 # handshake. Update this when the client version you want to support changes.
-BEDROCK_PROTOCOL_VERSION = 786
-BEDROCK_VERSION = "1.21.80"
+BEDROCK_PROTOCOL_VERSION = 2169
+BEDROCK_VERSION = "1.26.45"
 
 # ---------------------------------------------------------------------------
 # Xbox Live service identifiers
