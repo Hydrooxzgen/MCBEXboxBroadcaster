@@ -96,17 +96,34 @@ def _build_unconnected_ping() -> bytes:
 
 
 def _parse_unconnected_pong(data: bytes) -> bytes:
-    """Validate an unconnected pong and return the raw pong data."""
+    """Validate an unconnected pong and return the raw pong data.
+
+    Layout of an unconnected pong (as sent by BDS and other RakNet servers):
+
+    +--------------------+--------+-------------+------+-------------------+
+    | 0x1C (packet ID)   | 1 byte |             |      |                   |
+    +--------------------+--------+-------------+------+-------------------+
+    | ping time          | 8 bytes| big-endian  |      |                   |
+    +--------------------+--------+-------------+------+-------------------+
+    | server GUID        | 8 bytes| big-endian  |      |                   |
+    +--------------------+--------+-------------+------+-------------------+
+    | RakNet magic       |16 bytes|             |      |                   |
+    +--------------------+--------+-------------+------+-------------------+
+    | string length      | 2 bytes| big-endian  |      |                   |
+    +--------------------+--------+-------------+------+-------------------+
+    | MOTD string        | length | bytes       |      |                   |
+    +--------------------+--------+-------------+------+-------------------+
+    """
     if len(data) < 35:
         raise PingException("Pong response too short")
     offset = 1
     ping_time = struct.unpack(">q", data[offset : offset + 8])[0]
     offset += 8
+    # Server GUID (8 bytes) precedes the magic in the response
+    offset += 8
     if data[offset : offset + 16] != RAKNET_MAGIC:
         raise PingException("Invalid RakNet magic in pong response")
     offset += 16
-    # Server GUID (8 bytes)
-    offset += 8
     # Remaining data is the MOTD string (uint16 length prefixed)
     (length,) = struct.unpack(">H", data[offset : offset + 2])
     offset += 2
