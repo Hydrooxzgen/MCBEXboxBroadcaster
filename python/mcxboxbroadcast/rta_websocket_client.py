@@ -31,6 +31,7 @@ class RtaWebsocketClient:
 
         self._ws = None
         self._thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._closed = False
 
     # ------------------------------------------------------------------
@@ -52,12 +53,17 @@ class RtaWebsocketClient:
 
     def close(self) -> None:
         self._closed = True
-        if self._ws is not None:
+        ws = self._ws
+        self._ws = None
+        if ws is not None:
             try:
-                self._ws.close()
+                loop = self._loop
+                if loop is not None and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(ws.close(), loop).result(timeout=2.0)
+                else:
+                    asyncio.run(ws.close())
             except Exception:
                 pass
-            self._ws = None
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
@@ -78,6 +84,7 @@ class RtaWebsocketClient:
     def _run(self) -> None:
         try:
             loop = asyncio.new_event_loop()
+            self._loop = loop
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self._connect_loop())
         except Exception as e:
