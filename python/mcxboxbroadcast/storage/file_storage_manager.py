@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from datetime import datetime
 from typing import Mapping, Optional
 
@@ -14,7 +15,11 @@ class _SqlitePlayerHistoryStorage(PlayerHistoryStorage):
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._first_run = not os.path.exists(db_path)
-        self._conn = sqlite3.connect(db_path)
+        # check_same_thread=False because friend syncing runs on a background
+        # thread while the session manager uses the main thread. A lock keeps
+        # the single connection safe across those threads.
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._lock = threading.Lock()
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS players (xuid VARCHAR(32) PRIMARY KEY, lastSeen INTEGER);"
         )
@@ -24,26 +29,29 @@ class _SqlitePlayerHistoryStorage(PlayerHistoryStorage):
         return self._first_run
 
     def last_seen(self, xuid: str, last_seen: Optional[datetime] = None) -> Optional[datetime]:
-        if last_seen is None:
-            cur = self._conn.execute("SELECT lastSeen FROM players WHERE xuid = ?;", (xuid,))
-            row = cur.fetchone()
-            if row is None:
-                return None
-            return datetime.fromtimestamp(row[0])
-        self._conn.execute(
-            "INSERT OR REPLACE INTO players (xuid, lastSeen) VALUES (?, ?);",
-            (xuid, int(last_seen.timestamp())),
-        )
-        self._conn.commit()
-        return None
+        with self._lock:
+            if last_seen is None:
+                cur = self._conn.execute("SELECT lastSeen FROM players WHERE xuid = ?;", (xuid,))
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                return datetime.fromtimestamp(row[0])
+            self._conn.execute(
+                "INSERT OR REPLACE INTO players (xuid, lastSeen) VALUES (?, ?);",
+                (xuid, int(last_seen.timestamp())),
+            )
+            self._conn.commit()
+            return None
 
     def clear(self, xuid: str) -> None:
-        self._conn.execute("DELETE FROM players WHERE xuid = ?;", (xuid,))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("DELETE FROM players WHERE xuid = ?;", (xuid,))
+            self._conn.commit()
 
     def all(self) -> Mapping[str, datetime]:
-        cur = self._conn.execute("SELECT xuid, lastSeen FROM players;")
-        return {row[0]: datetime.fromtimestamp(row[1]) for row in cur.fetchall()}
+        with self._lock:
+            cur = self._conn.execute("SELECT xuid, lastSeen FROM players;")
+            return {row[0]: datetime.fromtimestamp(row[1]) for row in cur.fetchall()}
 
 
 class FileStorageManager(StorageManager):
