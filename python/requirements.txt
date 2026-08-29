@@ -1,0 +1,8 @@
+# HTTP client
+requests>=2.31.0
+# RTA websocket (async, mirrors the Java WebSocketClient usage)
+websockets>=12.0
+# Config files
+PyYAML>=6.0
+# NetherNet WebRTC transport (mirrors the kastle library dependency)
+aiortc>=1.5.0

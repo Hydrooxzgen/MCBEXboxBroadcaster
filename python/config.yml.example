@@ -1,0 +1,52 @@
+# MCXboxBroadcast configuration
+
+session:
+  # The IP address to broadcast, you likely want to change this to your server's public IP
+  remoteAddress: auto
+  # The port to broadcast, this should be left as auto unless you are manipulating the port
+  remotePort: auto
+  # Amount of time in seconds to update session information (minimum 20 due to Xbox rate limits)
+  updateInterval: 30
+  # Should we query the bedrock server to sync the session information
+  queryServer: true
+  # Use checker.geysermc.org for querying if the native ping fails
+  webQueryFallback: false
+  # Fallback to config values if all other server query methods fail
+  configFallback: false
+  # Who can see and join the session: friends (only friends, default) or public (everyone)
+  visibility: friends
+  sessionInfo:
+    hostName: Geyser Test Server
+    worldName: GeyserMC Demo & Test Server
+    players: 0
+    maxPlayers: 20
+    ip: test.geysermc.org
+    port: 19132
+  # Restrict the local UDP port range for WebRTC (NetherNet) ICE candidates
+  icePortRange:
+    min: 0
+    max: 0
+
+friendSync:
+  updateInterval: 60
+  autoFollow: true
+  autoUnfollow: true
+  initialInvite: true
+  expiry:
+    enabled: true
+    days: 15
+    check: 1800
+
+notifications:
+  enabled: false
+  webhookUrl: ""
+  sessionExpiredMessage: |
+    <!here> Xbox Session expired, sign in again to update it.
+
+    Use the following link to sign in: %s
+    Enter the code: %s
+  friendRestrictionMessage: |
+    %s (%s) has restrictions in place that prevent them from being friends with our account.
+
+debugMode: false
+suppressSessionUpdateMessage: false

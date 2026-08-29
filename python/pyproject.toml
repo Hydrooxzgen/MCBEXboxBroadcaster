@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcxboxbroadcast"
+version = "1.0.0"
+description = "Broadcast an existing Geyser/Bedrock server over Xbox Live (Python port)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31.0",
+    "websockets>=12.0",
+    "PyYAML>=6.0",
+    "aiortc>=1.5.0",
+]
+
+[project.scripts]
+mcxboxbroadcast = "mcxboxbroadcast.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mcxboxbroadcast*"]
