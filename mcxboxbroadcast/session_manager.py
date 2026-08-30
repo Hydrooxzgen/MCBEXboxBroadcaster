@@ -11,6 +11,7 @@ import requests
 from . import constants
 from .exceptions import SessionCreationException, SessionUpdateException
 from .logger import Logger
+from .models.session import CreateSessionRequest, CreateSessionResponse
 from .scheduled_executor import ScheduledExecutorService
 from .session_info import ExpandedSessionInfo, SessionInfo
 from .session_manager_core import SessionManagerCore
@@ -155,8 +156,6 @@ class SessionManager(SessionManagerCore):
     def update_session(self) -> None:
         # Make sure the websocket connection is still active
         self.check_connection()
-
-        from .models.session import CreateSessionRequest
 
         response_body = self.update_session_internal(
             constants.CREATE_SESSION % self.session_info.session_id,

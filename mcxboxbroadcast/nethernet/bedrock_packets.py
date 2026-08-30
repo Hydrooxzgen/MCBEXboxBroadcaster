@@ -91,13 +91,12 @@ def read_varint(data: bytes, offset: int) -> Tuple[int, int]:
 
 def write_string(buf: bytearray, text: str) -> None:
     encoded = text.encode("utf-8")
-    buf += struct.pack("<I", len(encoded))
+    write_varuint(buf, len(encoded))
     buf += encoded
 
 
 def read_string(data: bytes, offset: int) -> Tuple[str, int]:
-    (length,) = struct.unpack_from("<I", data, offset)
-    offset += 4
+    length, offset = read_varuint(data, offset)
     text = data[offset : offset + length].decode("utf-8", errors="replace")
     return text, offset + length
 
@@ -108,9 +107,39 @@ def write_uuid(buf: bytearray, value: uuid.UUID) -> None:
 
 
 # ------------------------------------------------------------------ framing
+def _encode_batch_inner(bodies: list[bytes]) -> bytes:
+    payload = bytearray()
+    for body in bodies:
+        write_varuint(payload, len(body))
+        payload += body
+    return bytes(payload)
+
+
+def _deflate(data: bytes) -> bytes:
+    # Bedrock compression is RAW deflate (no zlib wrapper)
+    co = zlib.compressobj(6, zlib.DEFLATED, -15)
+    return co.compress(data) + co.flush()
+
+
+def _inflate(data: bytes) -> bytes:
+    return zlib.decompress(data, -15)
+
+
+def encode_batch(bodies: list[bytes], compressed: bool = False) -> bytes:
+    """Encode packet bodies into one data-channel payload.
+
+    Compressed layout: [0x00][raw-deflate(varuint len + body)...]
+    Uncompressed layout: [varuint len + body]...
+    """
+    inner = _encode_batch_inner(bodies)
+    if compressed:
+        return bytes([COMPRESSION_ZLIB]) + _deflate(inner)
+    return inner
+
+
 def compress_frame(packet_bytes: bytes, threshold: int = 1) -> bytes:
     if len(packet_bytes) > threshold:
-        return bytes([COMPRESSION_ZLIB]) + zlib.compress(packet_bytes, 6)
+        return bytes([COMPRESSION_ZLIB]) + _deflate(packet_bytes)
     return bytes([COMPRESSION_NONE]) + packet_bytes
 
 
@@ -118,31 +147,44 @@ def decompress_frame(frame: bytes) -> bytes:
     header = frame[0]
     body = frame[1:]
     if header == COMPRESSION_ZLIB:
-        return zlib.decompress(body)
+        return _inflate(body)
     if header == COMPRESSION_NONE:
         return body
     raise ValueError(f"Unknown compression algorithm header: {header:#x}")
 
 
-def encode_batch(packets: list[bytes]) -> bytes:
-    """Encode decompressed packet bodies into one data-channel payload."""
-    payload = bytearray()
-    for body in packets:
-        write_varuint(payload, len(body))
-        payload += body
-    return bytes(payload)
+def decode_payload(payload: bytes, compressed: bool = True) -> list[bytes]:
+    """Decode one assembled data-channel payload into packet bodies.
 
+    Compressed frames carry the compression header byte BEFORE the length
+    prefix (matches the real client and kastle). A trailing partial batch
+    (client batching across compression switch) is tolerated.
+    """
+    if compressed:
+        if not payload:
+            return []
+        header = payload[0]
+        data = payload[1:]
+        if header == COMPRESSION_ZLIB:
+            data = _inflate(data)
+        elif header == COMPRESSION_NONE:
+            pass
+        else:
+            raise ValueError(f"Unknown compression algorithm header: {header:#x}")
+    else:
+        data = payload
 
-def decode_batch(payload: bytes) -> list[bytes]:
-    """Decode a data-channel payload into decompressed packet bodies."""
     out = []
     offset = 0
-    while offset < len(payload):
-        length, offset = read_varuint(payload, offset)
-        if offset + length > len(payload):
-            raise ValueError("truncated packet in batch")
-        out.append(decompress_frame(payload[offset : offset + length]))
-        offset += length
+    while offset < len(data):
+        try:
+            length, next_offset = read_varuint(data, offset)
+        except ValueError:
+            break
+        if next_offset + length > len(data):
+            break  # incomplete trailing data
+        out.append(data[next_offset : next_offset + length])
+        offset = next_offset + length
     return out
 
 
@@ -169,7 +211,7 @@ def network_settings(threshold: int = 0) -> bytes:
 
 
 def play_status(status: int) -> bytes:
-    return encode_packet_body(PACKET_PLAY_STATUS, struct.pack("<i", status))
+    return encode_packet_body(PACKET_PLAY_STATUS, struct.pack(">i", status))
 
 
 def disconnect(message: Optional[str] = None) -> bytes:
@@ -190,16 +232,16 @@ def resource_packs_info() -> bytes:
     buf.append(1)  # vibrantVisualsForceDisabled=true
     write_uuid(buf, uuid.UUID(int=0))
     write_string(buf, "")  # worldTemplateVersion
-    buf += struct.pack("<H", 0)  # resource pack entry count
+    write_varuint(buf, 0)  # resource pack entry count
     return encode_packet_body(PACKET_RESOURCE_PACKS_INFO, bytes(buf))
 
 
 def resource_pack_stack() -> bytes:
     buf = bytearray()
     buf.append(0)  # forcedToAccept=false
-    buf += struct.pack("<H", 0)  # resource pack entry count (writeArray uses ushort LE here)
+    write_varuint(buf, 0)  # resource pack entry count
     write_string(buf, "*")  # gameVersion
-    write_varuint(buf, 0)  # experiments count
+    buf += struct.pack("<i", 0)  # experiments count (writeIntLE)
     buf.append(0)  # experimentsPreviouslyToggled=false
     buf.append(0)  # hasEditorPacks=false
     return encode_packet_body(PACKET_RESOURCE_PACK_STACK, bytes(buf))
@@ -256,12 +298,12 @@ def start_game(
     buf.append(0)  # platformLockedContentConfirmed = false
     buf.append(1)  # multiplayerGame = true
     buf.append(1)  # broadcastingToLan = true
-    write_varint(buf, 0)  # xblBroadcastMode = PUBLIC (GamePublishSetting ordinal 0)
-    write_varint(buf, 0)  # platformBroadcastMode = PUBLIC
+    write_varint(buf, 4)  # xblBroadcastMode = PUBLIC (GamePublishSetting ordinal 4)
+    write_varint(buf, 4)  # platformBroadcastMode = PUBLIC
     buf.append(1)  # commandsEnabled = true
     buf.append(0)  # texturePacksRequired = false
     write_varuint(buf, 0)  # gamerules: empty array
-    write_varuint(buf, 0)  # experiments: empty array
+    buf += struct.pack("<i", 0)  # experiments: empty array (writeIntLE)
     buf.append(0)  # experimentsPreviouslyToggled = false
     buf.append(0)  # bonusChestEnabled = false
     buf.append(0)  # startingWithMap = false
@@ -305,7 +347,9 @@ def start_game(
     write_string(buf, "")  # serverEngine (v440)
 
     # ---- v527 additions ----
-    buf += b"\x0a\x00"  # playerPropertyData: empty compound (network NBT)
+    # playerPropertyData: empty compound; network NBT root tag carries an
+    # (empty) name, so type byte + name length varint(0) + end tag
+    buf += b"\x0a\x00\x00"
     buf += struct.pack("<Q", 0)  # blockRegistryChecksum (int64 LE)
     write_uuid(buf, uuid.UUID(int=0))  # worldTemplateId
 
@@ -327,13 +371,14 @@ def start_game(
 
 # ------------------------------------------------------- inbound deserializers
 def parse_request_network_settings(body: bytes) -> int:
-    (protocol,) = struct.unpack_from("<i", body, 0)
+    # Netty writeInt() is big endian
+    (protocol,) = struct.unpack_from(">i", body, 0)
     return protocol
 
 
 def parse_login(body: bytes) -> Tuple[int, str, str]:
-    """Returns (protocol, authJwt, clientJwt)."""
-    (protocol,) = struct.unpack_from("<i", body, 0)
+    """Returns (protocol, authPayloadJson, clientJwt)."""
+    (protocol,) = struct.unpack_from(">i", body, 0)
     offset = 4
     total_len, offset = read_varuint(body, offset)
     end = offset + total_len
@@ -345,6 +390,27 @@ def parse_login(body: bytes) -> Tuple[int, str, str]:
     offset += 4
     client_jwt = body[offset : offset + client_len].decode("utf-8", errors="replace")
     return protocol, auth_jwt, client_jwt
+
+
+def parse_auth_payload(auth_jwt: str) -> Tuple[str, str, str]:
+    """Parse the login auth payload (modern and legacy formats).
+
+    Returns (kind, token_or_chain_json, identity_key_b64):
+      kind == "token"  -> token_or_chain_json is the Mojang RS256 token JWT
+      kind == "chain"  -> token_or_chain_json is the raw JSON, identity key
+                          resolved by the legacy chain validator
+    """
+    payload = json.loads(auth_jwt)
+    cert = payload.get("Certificate")
+    token = payload.get("Token")
+    if token:
+        return "token", str(token), ""
+    if cert:
+        chain_json = json.loads(cert)
+        chain = chain_json.get("chain")
+        if isinstance(chain, list) and chain:
+            return "chain", auth_jwt, ""
+    raise ValueError("Login auth payload contains no Token or Certificate chain")
 
 
 def parse_resource_pack_client_response(body: bytes) -> Tuple[int, str]:

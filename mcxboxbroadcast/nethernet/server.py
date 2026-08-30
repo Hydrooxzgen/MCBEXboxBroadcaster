@@ -76,9 +76,11 @@ class RedirectSession:
         self.logger = peer.logger
         self.network_settings_requested = False
         self.identity_data: Optional[dict] = None
+        self._stack_sent = False
         self._closed = False
 
     def handle_packet(self, packet_id: int, body: bytes) -> None:
+        self.peer.logger.info(f"Bedrock packet from client: id={packet_id} len={len(body)}")
         if packet_id == bp.PACKET_REQUEST_NETWORK_SETTINGS:
             self._handle_request_network_settings(body)
         elif packet_id == bp.PACKET_LOGIN:
@@ -93,6 +95,7 @@ class RedirectSession:
     def _handle_request_network_settings(self, body: bytes) -> None:
         client_protocol = bp.parse_request_network_settings(body)
         server_protocol = self.server.protocol_version
+        self.logger.info(f"RequestNetworkSettings: client protocol={client_protocol}")
 
         # The client normally prevents you connecting to a server with a
         # different protocol number, but double check here
@@ -110,29 +113,91 @@ class RedirectSession:
 
     def _handle_login(self, body: bytes) -> None:
         if not self.network_settings_requested:
+            self.logger.warn("Client sent Login before NetworkSettings - disconnecting")
             self.peer.send_raw_packet(bp.play_status(bp.PLAY_STATUS_FAILED_CLIENT_OLD))
             self.disconnect(None)
+            return
+
+        try:
+            protocol, auth_jwt, client_jwt = bp.parse_login(body)
+            self.logger.info(f"Login packet: client protocol={protocol}")
+            if protocol != self.server.protocol_version:
+                self.disconnect(
+                    f"disconnectionScreen.outdatedServer (client={protocol}, "
+                    f"server={self.server.protocol_version})"
+                )
+                return
+
+            kind, credential, _ = bp.parse_auth_payload(auth_jwt)
+            if kind == "token":
+                # Modern login: Mojang RS256 token with xname/xid/cpk claims
+                from ..auth.mojang import verify_mojang_token
+                from ..auth.crypto import verify_jws
+                import base64, json as _json
+
+                claims = verify_mojang_token(credential)
+                cpk = claims.get("cpk", "")
+                if cpk:
+                    try:
+                        header = _json.loads(
+                            base64.urlsafe_b64decode(client_jwt.split(".")[0] + "=" * 4)
+                        )
+                        self.logger.info(
+                            f"Client data JWT alg={header.get('alg')} keys={sorted(header.keys())}"
+                        )
+                    except Exception:
+                        header = {}
+                    try:
+                        ok, alg = verify_jws(client_jwt, base64.b64decode(cpk))
+                    except Exception as ex:
+                        self.logger.error(
+                            f"Client data JWT verification error: {ex} "
+                            f"(cpk prefix: {cpk[:24]}...)"
+                        )
+                        ok = False
+                        alg = "?"
+                    if not ok:
+                        self.logger.error(
+                            f"Client data JWT failed to verify against cpk (alg={alg})"
+                        )
+                        self.disconnect("disconnect.loginFailed")
+                        return
+                self.identity_data = {
+                    "displayName": claims.get("xname", ""),
+                    "XUID": str(claims.get("xid", "")),
+                }
+            else:
+                # Legacy certificate chain login
+                signed, extra_data = bp.parse_login_chain(auth_jwt, client_jwt)
+                if not signed:
+                    self.logger.error("Login chain validation FAILED")
+                    self.disconnect("disconnect.loginFailed")
+                    return
+                self.identity_data = extra_data
+
+            self.logger.info(
+                f"Login validated for {self.identity_data.get('displayName', '?')} "
+                f"({self.identity_data.get('XUID', '?')})"
+            )
+        except Exception as ex:
+            self.logger.error(f"Failed to validate login packet: {ex}")
+            self.disconnect("disconnect.loginFailed")
             return
 
         self.peer.send_raw_packet(bp.play_status(bp.PLAY_STATUS_LOGIN_SUCCESS))
         self.peer.send_raw_packet(bp.resource_packs_info())
 
-        try:
-            protocol, auth_jwt, client_jwt = bp.parse_login(body)
-            if protocol != self.server.protocol_version:
-                raise ValueError(f"Login protocol {protocol} does not match")
-            signed, extra_data = bp.parse_login_chain(auth_jwt, client_jwt)
-            if not signed:
-                raise ValueError("Chain is not signed")
-            self.identity_data = extra_data
-        except Exception as ex:
-            self.logger.debug(f"Failed to validate login packet: {ex}")
-            self.disconnect("disconnect.loginFailed")
-
     def _handle_resource_pack_response(self, body: bytes) -> None:
         status, _response_type = bp.parse_resource_pack_client_response(body)
+        # With an empty pack list the client replies COMPLETED twice: once in
+        # response to ResourcePacksInfo (expecting ResourcePackStack) and once
+        # after the stack (expecting StartGame)
         if status == bp.RPC_STATUS_COMPLETED:
-            self._send_start_game()
+            if not self._stack_sent:
+                self._stack_sent = True
+                self.peer.send_raw_packet(bp.resource_pack_stack())
+            else:
+                self._send_start_game()
         elif status == bp.RPC_STATUS_HAVE_ALL_PACKS:
             self.peer.send_raw_packet(bp.resource_pack_stack())
         else:
@@ -149,7 +214,9 @@ class RedirectSession:
             display_name = self.identity_data.get("displayName", "")
             xuid = self.identity_data.get("XUID", "")
             self.server.logger.info(
-                f"Transferred bedrock client {display_name} ({xuid}) to target server."
+                f"Transferred bedrock client {display_name} ({xuid}) to target server "
+                f"({info.ip}:{info.port}). The client now connects to that address "
+                f"DIRECTLY - it must be publicly reachable."
             )
             try:
                 from datetime import datetime, timezone
@@ -162,6 +229,7 @@ class RedirectSession:
         self.close()
 
     def disconnect(self, message: Optional[str]) -> None:
+        self.peer.logger.warn(f"Disconnecting client: {message!r}")
         try:
             self.peer.send_raw_packet(bp.disconnect(message))
         except Exception:
@@ -188,6 +256,7 @@ class NetherNetPeer:
 
         self._assembly = bytearray()
         self._expected_segments = -1
+        self._pending_frames: list[tuple[int, bytes]] = []
 
         ice_servers = server.ice_servers()
         configuration = None
@@ -203,18 +272,35 @@ class NetherNetPeer:
 
         self.pc.on("datachannel")(self._on_datachannel)
 
+        def on_connection_state():  # aiortc emits this event with no arguments
+            state = self.pc.connectionState
+            self.logger.info(
+                f"Connection {self.connection_id} WebRTC state: {state}"
+            )
+            if state in ("failed", "closed", "disconnected"):
+                self.close()
+
+        self.pc.on("connectionstatechange")(on_connection_state)
+
     # -- signaling ------------------------------------------------------
     async def accept(self, offer_sdp: str) -> None:
         try:
+            self.logger.debug(f"Offer SDP ({len(offer_sdp)} bytes): {offer_sdp[:200]}...")
             await self.pc.setRemoteDescription(
                 RTCSessionDescription(sdp=offer_sdp, type="offer")
             )
             answer = await self.pc.createAnswer()
             await self.pc.setLocalDescription(answer)
+            self.logger.debug(
+                f"Local ICE gathering done, candidates: {len(extract_candidates(self.pc.localDescription.sdp))}"
+            )
             augmented = self.server.identity.augment_answer(self.pc.localDescription.sdp)
             self.server.signaling.send_signal_to(
                 self.remote_network_id,
                 Signal(SIGNAL_ANSWER, self.connection_id, augmented, ""),
+            )
+            self.logger.info(
+                f"Sent WebRTC answer for connection {self.connection_id} to client"
             )
             for candidate in extract_candidates(self.pc.localDescription.sdp):
                 self.server.signaling.send_signal_to(
@@ -245,7 +331,7 @@ class NetherNetPeer:
 
     # -- data channels ---------------------------------------------------
     def _on_datachannel(self, channel) -> None:
-        self.logger.debug(f"Received Data Channel: {channel.label}")
+        self.logger.info(f"Data channel open: {channel.label}")
         if channel.label == "ReliableDataChannel":
             self.reliable_channel = channel
         elif channel.label == "UnreliableDataChannel":
@@ -262,6 +348,34 @@ class NetherNetPeer:
 
     def _start_session(self) -> None:
         self.session = RedirectSession(self)
+        # Replay any packets that arrived before both channels were open
+        if self._pending_frames:
+            for packet_id, body in self._pending_frames:
+                self.session.handle_packet(packet_id, body)
+            self._pending_frames.clear()
+
+    def _handle_payload(self, payload: bytes) -> None:
+        self.logger.info(
+            "Client payload (%d bytes, compressed=%s): %s"
+            % (len(payload), self.compressed, payload[:48].hex())
+        )
+        try:
+            frames = bp.decode_payload(payload, compressed=self.compressed)
+        except ValueError as ex:
+            self.logger.error(
+                f"Payload decode error ({ex}); payload hex: {payload[:256].hex()}"
+            )
+            return
+        for frame in frames:
+            packet_id, body = bp.decode_packet_body(frame)
+            if self.session is not None:
+                self.session.handle_packet(packet_id, body)
+            else:
+                self.logger.info(
+                    f"Buffering bedrock packet {packet_id} ({len(body)} bytes) - "
+                    "session not fully established yet"
+                )
+                self._pending_frames.append((packet_id, body))
 
     # -- framing ----------------------------------------------------------
     def _handle_channel_message(self, message: bytes) -> None:
@@ -289,25 +403,17 @@ class NetherNetPeer:
                 self._expected_segments = -1
                 self._handle_payload(payload)
             except Exception as ex:
-                self.logger.error(f"Error processing NetherNet payload: {ex}", ex)
-                self.close()
-
-    def _handle_payload(self, payload: bytes) -> None:
-        frames = bp.decode_batch(payload)
-        for frame in frames:
-            packet_id, body = bp.decode_packet_body(frame)
-            if self.session is not None:
-                self.session.handle_packet(packet_id, body)
+                self.logger.error(
+                    f"Error processing NetherNet payload: {ex}", ex
+                )
 
     def send_raw_packet(self, raw_packet_body: bytes) -> None:
         """Send one bedrock packet (with compression framing applied)."""
         if self.closed:
             return
-        if self.compressed:
-            frame = bp.compress_frame(raw_packet_body)
-        else:
-            frame = bytes([bp.COMPRESSION_NONE]) + raw_packet_body
-        payload = bp.encode_batch([frame])
+        packet_id, _ = bp.decode_packet_body(raw_packet_body)
+        self.logger.info(f"Sending bedrock packet: id={packet_id} compressed={self.compressed}")
+        payload = bp.encode_batch([raw_packet_body], compressed=self.compressed)
         self._send_payload(payload)
 
     def _send_payload(self, payload: bytes) -> None:
@@ -396,7 +502,7 @@ class NetherNetServer:
     def _on_new_connection(self, connection_id: int, remote_network_id: str, offer_sdp: str) -> None:
         if connection_id in self._peers:
             return
-        self.logger.debug(
+        self.logger.info(
             f"Incoming NetherNet connection {connection_id} from {remote_network_id}"
         )
         peer = NetherNetPeer(self, connection_id, remote_network_id)

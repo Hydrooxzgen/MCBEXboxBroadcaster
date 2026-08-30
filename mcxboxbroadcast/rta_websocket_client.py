@@ -57,9 +57,17 @@ class RtaWebsocketClient:
         return self._connection_id_future
 
     def is_open(self) -> bool:
+        if self._closed:
+            return False
         ws = self._ws
+        if ws is None:
+            return False
         try:
-            return ws is not None and not ws.closed and not self._closed
+            closed = getattr(ws, "closed", None)
+            if closed is not None:  # websockets < 14
+                return not closed
+            # websockets >= 14: no .closed attribute
+            return ws.protocol.state.name == "OPEN"
         except Exception:
             return False
 

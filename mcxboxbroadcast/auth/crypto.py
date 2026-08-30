@@ -126,6 +126,44 @@ def verify_es256_jws(token: str, public_key_der_or_pem) -> bool:
         return False
 
 
+def verify_jws(token: str, public_key_der: bytes) -> tuple[bool, str]:
+    """Algorithm-adaptive compact JWS verification.
+
+    Supports ES256/ES384/ES512 and RS256/384/512. Returns (ok, alg).
+    """
+    import json as _json
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    header_b64, payload_b64, signature_b64 = token.split(".")
+    signing_input = f"{header_b64}.{payload_b64}".encode()
+    header = _json.loads(_b64url_decode(header_b64))
+    alg = str(header.get("alg", ""))
+    key = serialization.load_der_public_key(public_key_der)
+    signature = _b64url_decode(signature_b64)
+
+    if alg.startswith("ES"):
+        bits = {"ES256": 256, "ES384": 384, "ES512": 521}[alg]
+        sha = {"ES256": hashes.SHA256, "ES384": hashes.SHA384, "ES512": hashes.SHA512}[alg]
+        der_signature = _p1363_to_der(signature)
+        key.verify(der_signature, signing_input, ec.ECDSA(sha()))
+        return True, alg
+    if alg.startswith("RS"):
+        sha = {"RS256": hashes.SHA256, "RS384": hashes.SHA384, "RS512": hashes.SHA512}[alg]
+        key.verify(signature, signing_input, padding.PKCS1v15(), sha())
+        return True, alg
+    if alg.startswith("PS"):
+        sha = {"PS256": hashes.SHA256, "PS384": hashes.SHA384, "PS512": hashes.SHA512}[alg]
+        key.verify(
+            signature,
+            signing_input,
+            padding.PSS(mgf=padding.MGF1(sha()), salt_length=padding.AutoAutoSaltLength if hasattr(padding, "AutoAutoSaltLength") else padding.MAX_LENGTH),
+            sha(),
+        )
+        return True, alg
+    return False, alg
+
+
 def _int32_be(value: int) -> bytes:
     return value.to_bytes(4, "big", signed=True)
 
@@ -162,15 +200,23 @@ def _p1363_to_der(raw_signature: bytes) -> bytes:
     half = len(raw_signature) // 2
     r = int.from_bytes(raw_signature[:half], "big")
     s = int.from_bytes(raw_signature[half:], "big")
-    r_bytes = r.to_bytes((r.bit_length() + 7) // 8 or 1, "big")
-    s_bytes = s.to_bytes((s.bit_length() + 7) // 8 or 1, "big")
-    return (
-        b"\x30"
-        + bytes([4 + len(r_bytes) + len(s_bytes)])
-        + b"\x02"
+
+    def _int_to_der_bytes(value: int) -> bytes:
+        if value == 0:
+            return b"\x00"
+        out = value.to_bytes((value.bit_length() + 7) // 8, "big")
+        if out[0] & 0x80:  # DER: positive integers need a leading zero byte
+            out = b"\x00" + out
+        return out
+
+    r_bytes = _int_to_der_bytes(r)
+    s_bytes = _int_to_der_bytes(s)
+    content = (
+        b"\x02"
         + bytes([len(r_bytes)])
         + r_bytes
         + b"\x02"
         + bytes([len(s_bytes)])
         + s_bytes
     )
+    return b"\x30" + bytes([len(content)]) + content

@@ -111,11 +111,19 @@ class FranchiseSignaling:
         self._turn_ready = asyncio.Event()
 
     def is_active(self) -> bool:
-        return (
-            not self._closed
-            and self._ws is not None
-            and getattr(self._ws, "closed", False) is False
-        )
+        if self._closed:
+            return False
+        ws = self._ws
+        if ws is None:
+            return False
+        try:
+            closed = getattr(ws, "closed", None)
+            if closed is not None:  # websockets < 14
+                return not closed
+            # websockets >= 14: no .closed attribute
+            return ws.protocol.state.name == "OPEN"
+        except Exception:
+            return False
 
     def start(self) -> None:
         from ..asyncio_runner import shared_runner
@@ -126,40 +134,52 @@ class FranchiseSignaling:
         await asyncio.wait_for(self._turn_ready.wait(), timeout)
 
     async def _run(self) -> None:
-        try:
-            headers = {
-                "Authorization": self._mc_token_provider(),
-                "User-Agent": SIGNALING_USER_AGENT,
-                "session-id": str(uuid.uuid4()),
-                "request-id": str(uuid.uuid4()),
-            }
-            async with websockets.connect(
-                SIGNALING_URL, open_timeout=15, **_ws_connect_kwargs(headers)
-            ) as ws:
+        # Auto-reconnect loop: transient drops recover in place instead of
+        # forcing a full session recreation
+        while not self._closed:
+            try:
+                await self._run_once()
+            except asyncio.CancelledError:
+                break
+            except Exception as ex:
                 if self._closed:
-                    return
-                self._ws = ws
-                self.connected.set()
-                self.logger.debug("Franchise signaling websocket connected")
-
-                self._fetch_turn_auth_task = asyncio.create_task(self._fetch_turn_auth())
-                self._turn_ready.set()
-
-                ping_task = asyncio.create_task(self._ping_loop())
-                try:
-                    async for message in ws:
-                        await self._handle_message(message)
-                finally:
-                    ping_task.cancel()
-        except asyncio.CancelledError:
-            pass
-        except Exception as ex:
-            if not self._closed:
-                self.logger.error(f"Signaling websocket error: {ex}", ex)
-        finally:
+                    break
+                self.logger.warn(f"Signaling websocket lost ({ex}), reconnecting...")
+            if self._closed:
+                break
             self._ws = None
             self.connected.clear()
             self._turn_ready.clear()
+            try:
+                await asyncio.sleep(2)
+            except asyncio.CancelledError:
+                break
+
+    async def _run_once(self) -> None:
+        headers = {
+            "Authorization": self._mc_token_provider(),
+            "User-Agent": SIGNALING_USER_AGENT,
+            "session-id": str(uuid.uuid4()),
+            "request-id": str(uuid.uuid4()),
+        }
+        async with websockets.connect(
+            SIGNALING_URL, open_timeout=15, **_ws_connect_kwargs(headers)
+        ) as ws:
+            if self._closed:
+                return
+            self._ws = ws
+            self.connected.set()
+            self.logger.info("Franchise signaling websocket connected")
+
+            self._fetch_turn_auth_task = asyncio.create_task(self._fetch_turn_auth())
+            self._turn_ready.set()
+
+            ping_task = asyncio.create_task(self._ping_loop())
+            try:
+                async for message in ws:
+                    await self._handle_message(message)
+            finally:
+                ping_task.cancel()
 
     async def _fetch_turn_auth(self) -> None:
         try:

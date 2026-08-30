@@ -53,7 +53,7 @@ class BedrockAuthManager:
         self._session_private_key = ec.generate_private_key(ec.SECP384R1())
         self._session_public_key = self._session_private_key.public_key()
 
-        self._sisu_lock = threading.Lock()
+        self._sisu_lock = threading.RLock()
 
         self.msa_token = Holder[MsaToken](self._refresh_msa_token)
         self.xbl_device_token = Holder[XblDeviceToken](self._refresh_device_token)
@@ -97,11 +97,11 @@ class BedrockAuthManager:
         if msa:
             self.msa_token.set(
                 MsaToken(
-                    expire_time_ms=msa.get("expireTimeMs", 0),
-                    access_token=msa.get("accessToken", ""),
-                    refresh_token=msa.get("refreshToken"),
+                    expire_time_ms=msa.get("expire_time_ms", msa.get("expireTimeMs", 0)),
+                    access_token=msa.get("access_token", msa.get("accessToken", "")),
+                    refresh_token=msa.get("refresh_token", msa.get("refreshToken")),
                 ),
-                msa.get("expireTimeMs", 0),
+                msa.get("expire_time_ms", msa.get("expireTimeMs", 0)),
             )
         token_map = {
             "xblDeviceToken": (self.xbl_device_token, XblDeviceToken),
@@ -112,26 +112,39 @@ class BedrockAuthManager:
             "xboxLiveXstsToken": (self.xbox_live_xsts_token, XblXstsToken),
         }
         for key, (holder, cls_) in token_map.items():
-            stored = data.get(key)
+            stored = dict(data.get(key) or {})
             if stored:
-                holder.set(cls_(**stored), stored.get("expireTimeMs", 0))
-        stored_profile = data.get("profileInfo")
+                expire = stored.pop("expireTimeMs", None)
+                if expire is None:
+                    expire = stored.pop("expire_time_ms", 0)
+                holder.set(cls_(expire_time_ms=expire, **stored), expire)
+        stored_profile = dict(data.get("profileInfo") or {})
         if stored_profile:
-            self.profile_info.set(CachedProfileInfo(**stored_profile), stored_profile.get("expiresAtMs", 0))
-        stored_playfab = data.get("playFabToken")
+            expires = stored_profile.pop("expiresAtMs", None)
+            if expires is None:
+                expires = stored_profile.pop("expires_at_ms", 0)
+            self.profile_info.set(CachedProfileInfo(**stored_profile), expires / 1000.0 if expires > 1e11 else expires)
+        stored_playfab = dict(data.get("playFabToken") or {})
         if stored_playfab:
-            self.play_fab_token.set(
-                PlayFabToken(**stored_playfab), stored_playfab.get("expireTimeMs", 0)
-            )
-        stored_session = data.get("minecraftSession")
+            expire = stored_playfab.pop("expireTimeMs", None)
+            if expire is None:
+                expire = stored_playfab.pop("expire_time_ms", 0)
+            self.play_fab_token.set(PlayFabToken(expire_time_ms=expire, **stored_playfab), expire)
+        stored_session = dict(data.get("minecraftSession") or {})
         if stored_session:
+            expire = stored_session.pop("expireTimeMs", None)
+            if expire is None:
+                expire = stored_session.pop("expire_time_ms", 0)
             self.minecraft_session.set(
-                MinecraftSession(**stored_session), stored_session.get("expireTimeMs", 0)
+                MinecraftSession(expire_time_ms=expire, **stored_session), expire
             )
-        stored_mp = data.get("minecraftMultiplayerToken")
+        stored_mp = dict(data.get("minecraftMultiplayerToken") or {})
         if stored_mp:
+            expire = stored_mp.pop("expireTimeMs", None)
+            if expire is None:
+                expire = stored_mp.pop("expire_time_ms", 0)
             self.minecraft_multiplayer_token.set(
-                MinecraftMultiplayerToken(**stored_mp), stored_mp.get("expireTimeMs", 0)
+                MinecraftMultiplayerToken(expire_time_ms=expire, **stored_mp), expire
             )
 
     @staticmethod
@@ -152,45 +165,45 @@ class BedrockAuthManager:
         if self.msa_token.has_value:
             t = self.msa_token.get_cached()
             out["msaToken"] = {
-                "expireTimeMs": t.expire_time_ms,
-                "accessToken": t.access_token,
-                "refreshToken": t.refresh_token,
+                "expire_time_ms": t.expire_time_ms,
+                "access_token": t.access_token,
+                "refresh_token": t.refresh_token,
             }
         if self.xbl_device_token.has_value:
             t = self.xbl_device_token.get_cached()
             out["xblDeviceToken"] = {
-                "expireTimeMs": t.expire_time_ms,
+                "expire_time_ms": t.expire_time_ms,
                 "token": t.token,
                 "did": t.did,
             }
         if self.xbl_user_token.has_value:
             t = self.xbl_user_token.get_cached()
             out["xblUserToken"] = {
-                "expireTimeMs": t.expire_time_ms,
+                "expire_time_ms": t.expire_time_ms,
                 "token": t.token,
                 "uhs": t.uhs,
             }
         if self.xbl_title_token.has_value:
             t = self.xbl_title_token.get_cached()
-            out["xblTitleToken"] = {"expireTimeMs": t.expire_time_ms, "token": t.token}
+            out["xblTitleToken"] = {"expire_time_ms": t.expire_time_ms, "token": t.token}
         if self.bedrock_xsts_token.has_value:
             t = self.bedrock_xsts_token.get_cached()
             out["bedrockXstsToken"] = {
-                "expireTimeMs": t.expire_time_ms,
+                "expire_time_ms": t.expire_time_ms,
                 "token": t.token,
                 "user_hash": t.user_hash,
             }
         if self.play_fab_xsts_token.has_value:
             t = self.play_fab_xsts_token.get_cached()
             out["playFabXstsToken"] = {
-                "expireTimeMs": t.expire_time_ms,
+                "expire_time_ms": t.expire_time_ms,
                 "token": t.token,
                 "user_hash": t.user_hash,
             }
         if self.xbox_live_xsts_token.has_value:
             t = self.xbox_live_xsts_token.get_cached()
             out["xboxLiveXstsToken"] = {
-                "expireTimeMs": t.expire_time_ms,
+                "expire_time_ms": t.expire_time_ms,
                 "token": t.token,
                 "user_hash": t.user_hash,
             }
@@ -199,25 +212,25 @@ class BedrockAuthManager:
             out["profileInfo"] = {
                 "gamertag": t.gamertag,
                 "xuid": t.xuid,
-                "expiresAtMs": t.expires_at * 1000,
+                "expires_at_ms": t.expires_at * 1000,
             }
         if self.play_fab_token.has_value:
             t = self.play_fab_token.get_cached()
             out["playFabToken"] = {
-                "expireTimeMs": t.expire_time_ms,
+                "expire_time_ms": t.expire_time_ms,
                 "play_fab_id": t.play_fab_id,
                 "session_ticket": t.session_ticket,
             }
         if self.minecraft_session.has_value:
             t = self.minecraft_session.get_cached()
             out["minecraftSession"] = {
-                "expireTimeMs": t.expire_time_ms,
+                "expire_time_ms": t.expire_time_ms,
                 "authorization_header": t.authorization_header,
             }
         if self.minecraft_multiplayer_token.has_value:
             t = self.minecraft_multiplayer_token.get_cached()
             out["minecraftMultiplayerToken"] = {
-                "expireTimeMs": t.expire_time_ms,
+                "expire_time_ms": t.expire_time_ms,
                 "signed_token": t.signed_token,
             }
         return out
@@ -266,6 +279,7 @@ class BedrockAuthManager:
         )
 
     def _refresh_device_token(self) -> XblDeviceToken:
+        logger.info("[auth] 1/6 Requesting Xbox device token...")
         url = req.DEVICE_AUTH_URL
         proof_key = self._proof_key()
         body = {
@@ -299,6 +313,7 @@ class BedrockAuthManager:
         )
 
     def _refresh_sisu_tokens(self) -> None:
+        logger.info("[auth] 2/6 Requesting SISU tokens (user/title/XSTS)...")
         with self._sisu_lock:
             device_token = self.xbl_device_token.get_up_to_date()
             msa_token = self.msa_token.get_up_to_date()
@@ -380,6 +395,7 @@ class BedrockAuthManager:
         )
 
     def _refresh_xbox_live_xsts(self) -> XblXstsToken:
+        logger.info("[auth] 3/6 Requesting Xbox Live XSTS token...")
         device_token = self.xbl_device_token.get_up_to_date()
         user_token = self.xbl_user_token.get_up_to_date()
         title_token = self.xbl_title_token.get_up_to_date()
@@ -392,12 +408,15 @@ class BedrockAuthManager:
         )
 
     def _refresh_profile(self) -> CachedProfileInfo:
+        logger.info("[auth] 6/6 Fetching Xbox profile...")
         return req.request_profile(self._http, self.xbox_live_xsts_token.get_up_to_date())
 
     def _refresh_play_fab_token(self) -> PlayFabToken:
+        logger.info("[auth] 4/6 Logging in to PlayFab...")
         return req.request_play_fab_login(self._http, self.play_fab_xsts_token.get_up_to_date())
 
     def _refresh_minecraft_session(self) -> MinecraftSession:
+        logger.info("[auth] 5/6 Starting Minecraft session...")
         return req.request_minecraft_session(
             self._http,
             self.play_fab_token.get_up_to_date(),
@@ -427,17 +446,28 @@ class BedrockAuthManager:
         return self.minecraft_session.get_up_to_date().authorization_header
 
     def get_pmsg_id(self) -> Optional[str]:
-        """Extract the 'pmid' claim from the multiplayer token JWT payload."""
+        """Extract the 'pmid' claim from the Minecraft session token JWT.
+
+        The Java code parses the MCToken JWT carried by the Minecraft session
+        authorization header ("MCToken <jwt>"), not the multiplayer token.
+        """
         import base64
 
-        token = self.minecraft_multiplayer_token.get_up_to_date().signed_token
+        header_value = self.minecraft_session.get_up_to_date().authorization_header
         try:
-            payload_b64 = token.split(".")[1]
+            jwt_token = header_value.split(" ", 2)[1] if " " in header_value else header_value
+            payload_b64 = jwt_token.split(".")[1]
             padding = "=" * (-len(payload_b64) % 4)
             payload = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
-            return payload.get("pmid")
+            pmid = payload.get("pmid")
+            if pmid is None:
+                logger.warn(
+                    f"pmid claim missing from Minecraft session token payload keys: "
+                    f"{sorted(payload.keys())}"
+                )
+            return pmid
         except Exception as ex:
-            logger.warn(f"Failed to parse pmid from multiplayer token: {ex}")
+            logger.warn(f"Failed to parse pmid from Minecraft session token: {ex}")
             return None
 
     def get_gamertag(self) -> str:
@@ -516,36 +546,64 @@ class AuthManager:
                 self.logger.error("Failed to get/refresh auth token", ex)
 
     def _login_with_device_code(self) -> BedrockAuthManager:
-        device_code = req.request_msa_device_code(self._http)
-        self.logger.info(
-            "To sign in, use a web browser to open the page "
-            f"{device_code.verification_uri} and enter the code {device_code.user_code} "
-            "to authenticate."
-        )
-        self.notification_manager.send_session_expired_notification(
-            device_code.verification_uri, device_code.user_code
-        )
-
         import time as _time
 
-        while True:
+        device_code = None
+        last_log_time = 0.0
+        poll_count = 0
+        token = None
+
+        while token is None:
+            # Request a fresh device code when none exists or the current one expired
+            if device_code is None or _time.time() >= device_code.expires_at:
+                device_code = req.request_msa_device_code(self._http)
+                poll_count = 0
+                self.logger.info("=" * 60)
+                self.logger.info("需要登录 Xbox 账号 / Microsoft sign-in required:")
+                self.logger.info(f"  1. Open this page:  {device_code.verification_uri}")
+                self.logger.info(f"  2. Enter this code: {device_code.user_code}")
+                self.logger.info(
+                    "  3. Sign in with the account to broadcast, then approve."
+                )
+                self.logger.info("等待你在浏览器中完成登录... / Waiting for sign-in...")
+                self.logger.info("=" * 60)
+                self.notification_manager.send_session_expired_notification(
+                    device_code.verification_uri, device_code.user_code
+                )
+
             try:
                 token = req.request_msa_device_code_token(self._http, device_code.device_code)
                 break
             except req.AuthRequestException as ex:
                 if ex.error == "authorization_pending":
+                    poll_count += 1
+                    now = _time.time()
+                    # Show a liveness message roughly every 30 seconds
+                    if now - last_log_time >= 30:
+                        last_log_time = now
+                        self.logger.info(
+                            "仍在等待浏览器授权... / Still waiting for you to finish "
+                            "signing in on the website (open the link, enter the code, "
+                            "choose the account and approve)."
+                        )
                     _time.sleep(device_code.interval)
                     continue
                 if ex.error == "slow_down":
                     _time.sleep(device_code.interval + 5)
                     continue
+                if ex.error == "expired_token":
+                    device_code = None  # request a new code
+                    continue
                 raise
 
+        self.logger.info("登录成功！/ Sign-in successful, continuing authentication chain...")
         manager = BedrockAuthManager(self._http, constants.MINECRAFT_VERSION)
         manager.msa_token.set(token, token.expire_time_ms)
         return manager
 
     def _refresh_tokens(self) -> None:
+        if self.auth_manager is None:
+            raise RuntimeError("Not authenticated")
         try:
             self.auth_manager.xbox_live_xsts_token.get_up_to_date()
             self.auth_manager.play_fab_token.get_up_to_date()
@@ -586,6 +644,11 @@ class AuthManager:
         except Exception as ex:
             self.logger.error("Failed to refresh tokens", ex)
             self.initialise(False)
+        if self.auth_manager is None:
+            raise RuntimeError(
+                "Authentication failed. See the error above; fix the problem "
+                "and restart the program."
+            )
         return self.auth_manager
 
     def set_on_device_token_refresh_callback(self, callback: Callable[[], None]) -> None:

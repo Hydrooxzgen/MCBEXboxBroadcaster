@@ -62,7 +62,11 @@ def main() -> None:
 
     # Fallback to the gamertag if the host name is empty
     if not session_info.host_name:
-        session_info.host_name = session_manager.get_gamertag()
+        try:
+            session_info.host_name = session_manager.get_gamertag()
+        except Exception as ex:
+            logger.error("Failed to authenticate", ex)
+            return
 
     set_web_ping_enabled(config.session.web_query_fallback)
 
@@ -176,6 +180,9 @@ def create_session() -> None:
                 session_manager.logger.debug("Updated session!")
             else:
                 session_manager.logger.info("Updated session!")
+        except requests.RequestException as ex:
+            # Transient Xbox Live hiccups recover on the next cycle
+            session_manager.logger.warn(f"Session update hit a network error, will retry: {ex}")
         except Exception as ex:
             session_manager.logger.error("Failed to update session", ex)
 

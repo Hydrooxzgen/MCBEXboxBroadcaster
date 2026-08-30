@@ -81,10 +81,12 @@ class Holder(Generic[T]):
     def __init__(
         self,
         refresher: Callable[[], T],
-        lock: Optional[threading.Lock] = None,
+        lock: Optional[threading.RLock] = None,
     ) -> None:
         self._refresher = refresher
-        self._lock = lock or threading.Lock()
+        # RLock: refreshers may re-acquire the same lock (re-entrant,
+        # mirroring Java synchronized semantics)
+        self._lock = lock or threading.RLock()
         self._cached: Optional[T] = None
         self._expire_time_ms: float = 0
         self.change_listeners: list[Callable[[T], None]] = []

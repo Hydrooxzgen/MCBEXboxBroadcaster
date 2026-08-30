@@ -81,14 +81,22 @@ class ServerIdentity:
         return signing_input + "." + self._sign(signing_input.encode())
 
     def identity_value(self, answer_sdp: str) -> str:
-        identity = {
-            "idp": {"domain": self.domain, "protocol": "default"},
-            "assertion": {
+        # Mirrors kastle's Identity.toJson(): the assertion is double-serialized
+        # (an object rendered to a string inside the outer JSON)
+        assertion = json.dumps(
+            {
                 "token": self._token,
                 "fingerprints": self._fingerprint_assertion(answer_sdp),
             },
+            separators=(",", ":"),
+        )
+        identity = {
+            "idp": {"domain": self.domain, "protocol": "default"},
+            "assertion": assertion,
         }
-        return base64.b64encode(json.dumps(identity).encode()).decode()
+        return base64.b64encode(
+            json.dumps(identity, separators=(",", ":")).encode()
+        ).decode()
 
     def augment_answer(self, answer_sdp: str) -> str:
         line = "a=identity:" + self.identity_value(answer_sdp)

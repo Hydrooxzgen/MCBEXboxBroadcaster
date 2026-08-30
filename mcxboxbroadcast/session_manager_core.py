@@ -56,13 +56,13 @@ class SessionManagerCore:
     def friendManager(self) -> FriendManager:
         return self.friend_manager_
 
-    def notificationManager(self) -> NotificationManager:
+    def notification_manager(self) -> NotificationManager:
         return self.notification_manager_
 
     def galleryManager(self) -> GalleryManager:
         return self.gallery_manager_
 
-    def storageManager(self) -> StorageManager:
+    def storage_manager(self) -> StorageManager:
         return self.storage_manager_
 
     def logger_(self) -> Logger:
@@ -332,6 +332,16 @@ class SessionManagerCore:
             protocol_version=constants.PROTOCOL_VERSION,
         )
         self.session_info.pmsg_id = self.get_auth_manager().get_pmsg_id()
+        if self.session_info.pmsg_id is None:
+            self.logger.error(
+                "pmsgId is missing from the Minecraft session token - "
+                "clients will NOT be able to join the session!"
+            )
+        else:
+            self.logger.info(
+                f"Session connection info: NetherNetId={self.session_info.nether_net_id} "
+                f"PmsgId={self.session_info.pmsg_id}"
+            )
         self.nether_net_server.start()
 
     def shutdown(self) -> None:

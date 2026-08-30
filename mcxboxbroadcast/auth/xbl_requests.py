@@ -108,9 +108,16 @@ def request_msa_device_code_token(session: requests.Session, device_code: str) -
         data={"client_id": MSA_CLIENT_ID, "grant_type": "device_code", "device_code": device_code},
         timeout=15,
     )
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
     if response.status_code != 200:
         error = data.get("error", "")
         if error == "authorization_pending":
+            # The user has not finished the browser flow yet; keep polling
             raise AuthRequestException("authorization_pending", 400, error=error)
         if error == "slow_down":
             raise AuthRequestException("slow_down", 400, error=error)
@@ -120,7 +127,6 @@ def request_msa_device_code_token(session: requests.Session, device_code: str) -
             response.text[:2000],
             error=error,
         )
-    data = response.json()
     return MsaToken(
         expire_time_ms=(time.time() + int(data["expires_in"])) * 1000,
         access_token=data["access_token"],

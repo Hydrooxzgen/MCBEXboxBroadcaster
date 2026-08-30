@@ -158,3 +158,7 @@ class ExpandedSessionInfo(SessionInfo):
     @property
     def world_name(self) -> str:
         return super().world_name if self._world_name else self.host_name
+
+    @world_name.setter
+    def world_name(self, value: str) -> None:
+        self._world_name = remove_color_codes(value)
