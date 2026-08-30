@@ -142,19 +142,24 @@ class RtaWebsocketClient:
             logger.info(f"RTA Websocket [{self._prefix}] event received")
             data = parts[2] if len(parts) > 2 else {}
             if isinstance(data, dict):
-                if data.get("NotificationType") == "IncomingFriendRequestCountChanged":
-                    logger.debug(
-                        f"RTA Websocket [{self._prefix}] friend request: {message}"
-                    )
-                    self.on_friend_request()
-                if "ncid" in data:
-                    try:
-                        self.on_nonce_update()
-                    except Exception as ex:
-                        logger.error(
-                            f"RTA Websocket [{self._prefix}] failed to update session nonces: {ex}",
-                            ex,
+                try:
+                    if data.get("NotificationType") == "IncomingFriendRequestCountChanged":
+                        logger.info(
+                            f"RTA Websocket [{self._prefix}] friend request notification"
                         )
+                        self.on_friend_request()
+                except Exception as ex:
+                    logger.error(
+                        f"RTA Websocket [{self._prefix}] friend request handling failed: {ex}", ex
+                    )
+                try:
+                    if "ncid" in data:
+                        self.on_nonce_update()
+                except Exception as ex:
+                    logger.error(
+                        f"RTA Websocket [{self._prefix}] failed to update session nonces: {ex}",
+                        ex,
+                    )
         elif msg_type == 4:  # Resync
             logger.debug(f"RTA Websocket [{self._prefix}] resync: {message}")
         else:
