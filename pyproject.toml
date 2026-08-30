@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcxboxbroadcast"
-version = "1.0.0"
+version = "1.0.1"
 description = "Broadcast an existing Geyser/Bedrock server over Xbox Live (Python port)"
 readme = "README.md"
 requires-python = ">=3.10"

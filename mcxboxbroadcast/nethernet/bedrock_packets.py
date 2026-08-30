@@ -249,9 +249,11 @@ def resource_pack_stack() -> bytes:
 
 
 def transfer(address: str, port: int) -> bytes:
+    if not 0 <= port <= 65535:
+        raise ValueError(f"Transfer port out of range: {port}")
     buf = bytearray()
     write_string(buf, address)
-    buf += struct.pack("<h", port)
+    buf += struct.pack("<H", port)  # unsigned short LE (ports may exceed 32767)
     buf.append(0)  # reloadWorld=false
     buf.append(0)  # gatheringsConfigurationJoinInfo optional: absent
     return encode_packet_body(PACKET_TRANSFER, bytes(buf))
