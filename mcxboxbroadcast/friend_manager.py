@@ -215,6 +215,8 @@ class FriendManager:
 
             def sync() -> None:
                 try:
+                    added_count = 0
+                    removed_count = 0
                     for person in self.get():
                         # Make sure we are not targeting a subaccount (eg: split screen)
                         if self._is_guest_account(person.xuid):
@@ -227,6 +229,7 @@ class FriendManager:
                             and not person.is_followed_by_caller
                         ):
                             self.add(person.xuid, person.display_name)
+                            added_count += 1
 
                         # Unfollow the person
                         if (
@@ -235,8 +238,13 @@ class FriendManager:
                             and person.is_followed_by_caller
                         ):
                             self.remove(person.xuid, person.display_name)
+                            removed_count += 1
                 except Exception as ex:
                     self.logger.error("Failed to sync friends", ex)
+                else:
+                    self.logger.info(
+                        f"Friend sync finished: added {added_count}, removed {removed_count}"
+                    )
 
             self.sessionManager.scheduled_thread().schedule_with_fixed_delay(
                 sync,
@@ -442,6 +450,10 @@ class FriendManager:
             # We got no pending friend requests returned
             if friend_request_response.people is None:
                 return
+
+            self.logger.info(
+                f"Found {len(friend_request_response.people)} pending friend request(s)"
+            )
 
             xuids = [p.xuid for p in friend_request_response.people]
 
