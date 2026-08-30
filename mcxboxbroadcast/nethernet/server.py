@@ -188,33 +188,34 @@ class RedirectSession:
         self.peer.send_raw_packet(bp.resource_packs_info())
 
     def _handle_resource_pack_response(self, body: bytes) -> None:
-        status, _response_type = bp.parse_resource_pack_client_response(body)
-        # With an empty pack list the client replies COMPLETED twice: once in
-        # response to ResourcePacksInfo (expecting ResourcePackStack) and once
-        # after the stack (expecting StartGame)
-        if status == bp.RPC_STATUS_COMPLETED:
-            if not self._stack_sent:
-                self._stack_sent = True
-                self.peer.send_raw_packet(bp.resource_pack_stack())
-            else:
-                self._send_start_game()
-        elif status == bp.RPC_STATUS_HAVE_ALL_PACKS:
+        status, response_type = bp.parse_resource_pack_client_response(body)
+        self.logger.info(f"ResourcePackClientResponse: status={status} ({response_type})")
+        # Flow: ResourcePacksInfo -> HAVE_ALL_PACKS ("downloadingfinished")
+        #       ResourcePackStack  -> COMPLETED ("resourcepackstackfinished")
+        if status == bp.RPC_STATUS_HAVE_ALL_PACKS:
             self.peer.send_raw_packet(bp.resource_pack_stack())
+        elif status == bp.RPC_STATUS_COMPLETED:
+            self._send_start_game()
         else:
             self.disconnect("disconnectionScreen.resourcePack")
 
     def _send_start_game(self) -> None:
+        import asyncio
+
         info = self.server.session_info
         self.peer.send_raw_packet(
             bp.start_game(info.host_name, info.world_name, info.players, info.max_players)
         )
-        self.peer.send_raw_packet(bp.transfer(info.ip, info.port))
+        self.logger.info("StartGame sent, waiting for the client to settle before Transfer...")
 
-        if self.identity_data is not None:
-            display_name = self.identity_data.get("displayName", "")
-            xuid = self.identity_data.get("XUID", "")
+        def send_transfer() -> None:
+            if self.peer.closed or self._closed:
+                return
+            info = self.server.session_info
+            self.peer.send_raw_packet(bp.transfer(info.ip, info.port))
             self.server.logger.info(
-                f"Transferred bedrock client {display_name} ({xuid}) to target server "
+                f"Transferred bedrock client {self.identity_data.get('displayName', '?')} "
+                f"({self.identity_data.get('XUID', '?')}) to target server "
                 f"({info.ip}:{info.port}). The client now connects to that address "
                 f"DIRECTLY - it must be publicly reachable."
             )
@@ -222,11 +223,19 @@ class RedirectSession:
                 from datetime import datetime, timezone
 
                 self.server.player_history().last_seen(
-                    str(xuid), datetime.now(timezone.utc)
+                    str(self.identity_data.get("XUID", "0")),
+                    datetime.now(timezone.utc),
                 )
-            except IOError:
+            except (IOError, ValueError):
                 pass
-        self.close()
+            # Give the client a moment to act on the Transfer, then close
+            asyncio.get_event_loop().call_later(2.0, self._delayed_close)
+
+        asyncio.get_event_loop().call_later(1.5, send_transfer)
+
+    def _delayed_close(self) -> None:
+        if not self.peer.closed:
+            self.close()
 
     def disconnect(self, message: Optional[str]) -> None:
         self.peer.logger.warn(f"Disconnecting client: {message!r}")
@@ -412,7 +421,12 @@ class NetherNetPeer:
         if self.closed:
             return
         packet_id, _ = bp.decode_packet_body(raw_packet_body)
-        self.logger.info(f"Sending bedrock packet: id={packet_id} compressed={self.compressed}")
+        if packet_id in (bp.PACKET_START_GAME, bp.PACKET_TRANSFER):
+            self.logger.info(
+                f"Sending bedrock packet: id={packet_id} body={raw_packet_body.hex()}"
+            )
+        else:
+            self.logger.info(f"Sending bedrock packet: id={packet_id} compressed={self.compressed}")
         payload = bp.encode_batch([raw_packet_body], compressed=self.compressed)
         self._send_payload(payload)
 

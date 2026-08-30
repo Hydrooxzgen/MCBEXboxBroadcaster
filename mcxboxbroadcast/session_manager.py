@@ -146,7 +146,7 @@ class SessionManager(SessionManagerCore):
                 # Generate a nonce
                 nonce = secrets.token_hex(8)
                 self.nonces[xuid] = nonce
-                self.logger.debug(f"Generated nonce for XUID {xuid}: {nonce}")
+                self.logger.info(f"Player joined the session: XUID {xuid}, generated nonce")
                 has_changes = True
 
         # Only update the session properties if something changed

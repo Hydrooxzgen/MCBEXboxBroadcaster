@@ -192,9 +192,9 @@ class FranchiseSignaling:
 
     async def _ping_loop(self) -> None:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(20)
             try:
-                await self._rpc(METHOD_PING, {})
+                await asyncio.wait_for(self._rpc(METHOD_PING, {}), 10)
             except Exception as ex:
                 self.logger.debug(f"Signaling ping failed: {ex}")
 
