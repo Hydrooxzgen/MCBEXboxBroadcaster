@@ -53,3 +53,11 @@ def setup_console_logging() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+    # aiortc/aioice probes unusable link-local addresses on Windows; the bind
+    # failures are harmless noise with dynamic logger names - filter by text
+    class _BindNoiseFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "Could not bind to" not in record.getMessage()
+
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(_BindNoiseFilter())

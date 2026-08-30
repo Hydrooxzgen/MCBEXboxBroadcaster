@@ -108,6 +108,13 @@ XBL Signature 请求头（device.auth / sisu 需要）：
 
 ## 6. 其它
 
+- **Transfer 时机（实测关键）**：StartGame 和 Transfer 不能同时发——客户端需要约 1.5 秒
+  处理 StartGame 进入世界加载状态后才接受 Transfer。立即发送会被客户端忽略并断开。
+  Python 实现采用 StartGame → 延迟 1.5s → Transfer → 延迟 2s 关闭连接。
+- StartGame 编码已与 CloudburstMC 3.0.Beta13（2026-08-28 快照）输出逐字节对齐，
+  注意：dayCycleStopTime 默认 0、gamerule 带 editable 标志（v844+）、
+  experiments 数量是 intLE、limW/limH 默认 0、无 tickDeathSystemsEnabled（新协议已删）。
+
 - RakNet ping: 0x01 + magic(16B) + guid(LE 8B)；pong: 0x1c + time(LE) + **serverGUID(LE)**
   + magic + ushort BE 长度 + UTF-8 字符串
 - web ping fallback: `https://checker.geysermc.org/ping?hostname=&port=` → data.ping.pong

@@ -43,9 +43,10 @@ PLAY_STATUS_LOGIN_FAILED_CLIENT_OLD = 0  # real value set below
 PLAY_STATUS_FAILED_CLIENT_OLD = 2
 
 # ResourcePackClientResponse.Status enum order (CloudburstMC):
-# REFUSED=0, SEND_PACKS=1, HAVE_ALL_PACKS=2, COMPLETED=3 (values are written -1)
-RPC_STATUS_HAVE_ALL_PACKS = 2
-RPC_STATUS_COMPLETED = 3
+# NONE=0, REFUSED=1, SEND_PACKS=2, HAVE_ALL_PACKS=3, COMPLETED=4
+# (the wire carries ordinal - 1)
+RPC_STATUS_HAVE_ALL_PACKS = 3
+RPC_STATUS_COMPLETED = 4
 
 COMPRESSION_ZLIB = 0x00
 COMPRESSION_NONE = 0xFF
@@ -289,7 +290,7 @@ def start_game(
     write_varint(buf, 0)  # editorWorldType = NON_EDITOR
     buf.append(0)  # createdInEditor = false
     buf.append(0)  # exportedFromEditor = false
-    write_varint(buf, -1)  # dayCycleStopTime = -1
+    write_varint(buf, 0)  # dayCycleStopTime = 0 (Java leaves the field at its default)
     write_varuint(buf, 0)  # eduEditionOffers = 0
     buf.append(0)  # eduFeaturesEnabled = false
     write_string(buf, "")  # educationProductionId
@@ -302,7 +303,11 @@ def start_game(
     write_varint(buf, 4)  # platformBroadcastMode = PUBLIC
     buf.append(1)  # commandsEnabled = true
     buf.append(0)  # texturePacksRequired = false
-    write_varuint(buf, 0)  # gamerules: empty array
+    write_varuint(buf, 1)  # gamerules: one entry (showcoordinates)
+    write_string(buf, "showcoordinates")
+    buf.append(0)  # editable = false (v844+ StartGame gamerule flag)
+    write_varuint(buf, 1)  # type = 1 (boolean)
+    buf.append(0)  # value = false
     buf += struct.pack("<i", 0)  # experiments: empty array (writeIntLE)
     buf.append(0)  # experimentsPreviouslyToggled = false
     buf.append(0)  # bonusChestEnabled = false
@@ -320,8 +325,8 @@ def start_game(
     buf.append(0)  # disablingCustomSkins = false
     buf.append(0)  # emoteChatMuted = false
     write_string(buf, "*")  # vanillaVersion
-    buf += struct.pack("<i", 16)  # limitedWorldWidth (int LE)
-    buf += struct.pack("<i", 16)  # limitedWorldHeight (int LE)
+    buf += struct.pack("<i", 0)  # limitedWorldWidth (int LE)
+    buf += struct.pack("<i", 0)  # limitedWorldHeight (int LE)
     buf.append(0)  # netherType = false
     write_string(buf, "")  # eduSharedUriResource buttonName
     write_string(buf, "")  # eduSharedUriResource linkUri
@@ -329,7 +334,7 @@ def start_game(
     buf.append(0)  # chatRestrictionLevel = NONE (byte)
     buf.append(0)  # disablingPlayerInteractions = false
     write_varint(buf, 0)  # serverEditorConnectionPolicy (v1001)
-    buf.append(1)  # allowAnonymousBlockDropsInEditorWorlds = true
+    buf.append(0)  # allowAnonymousBlockDropsInEditorWorlds = false
 
     # ---- v428 serialize tail ----
     write_string(buf, "")  # levelId
@@ -354,9 +359,10 @@ def start_game(
     write_uuid(buf, uuid.UUID(int=0))  # worldTemplateId
 
     # ---- v582 / v544 / v827(v898) additions ----
+    # (note: the newest protocol removed tickDeathSystemsEnabled; only
+    # networkPermissions.serverAuthSounds is written here)
     buf.append(0)  # blockNetworkIdsHashed = false
     buf.append(0)  # clientSideGenerationEnabled = false
-    buf.append(0)  # tickDeathSystemsEnabled = false
     buf.append(0)  # networkPermissions.serverAuthSounds = false
 
     # ---- v924 additions ----
