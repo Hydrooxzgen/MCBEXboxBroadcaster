@@ -108,6 +108,11 @@ XBL Signature 请求头（device.auth / sisu 需要）：
 
 ## 6. 其它
 
+- **"好友的好友"(FOF)不可用（实测结论）**：MinecraftLobby 模板带 'userAuthorizationStyle'
+  能力，禁止 joinRestriction/readRestriction 设为 none；保持 followed 时会话目录只对
+  所有者的直接关注者可见。修改自定义 Joinability 字段、或整个省略 system 属性均无法让
+  FOF 玩家看到/加入会话。扩大覆盖面用自动回关(2000 上限)+子会话账号。
+
 - **Transfer 时机（实测关键）**：StartGame 和 Transfer 不能同时发——客户端需要约 1.5 秒
   处理 StartGame 进入世界加载状态后才接受 Transfer。立即发送会被客户端忽略并断开。
   Python 实现采用 StartGame → 延迟 1.5s → Transfer → 延迟 2s 关闭连接。
