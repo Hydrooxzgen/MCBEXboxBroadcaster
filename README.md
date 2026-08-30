@@ -66,9 +66,9 @@ This repository is a **Python rewrite** of [MCXboxBroadcast/Broadcaster](https:/
 | Python | 3.10+（推荐 3.11+ / recommended 3.11+） |
 | 目标服务器 / Target server | 任意 Bedrock 服务器（如 Geyser / BDS），需可公网访问 / Any Bedrock server (e.g. Geyser / BDS), must be publicly reachable |
 
-依赖清单 / Dependencies（`requirements.txt`）：`requests`、`websockets`、`PyYAML`、`aiortc`
+依赖清单 / Dependencies（`requirements.txt`）：`requests`、`websockets`、`PyYAML`、`cryptography`、`aiortc`
 
-> ⚠️ `aiortc` 是**必需依赖**（对应原版 Java 的 kastle 库）。未安装时 NetherNet 传输不可用，会话无法被加入。
+> ⚠️ `aiortc` 是**必需依赖**（对应原版 Java 的 kastle/WebRTC 库）。未安装时 NetherNet 传输不可用，会话无法被加入。`cryptography` 用于 Xbox Live 请求签名与登录链校验。
 
 ---
 
@@ -79,43 +79,43 @@ This repository is a **Python rewrite** of [MCXboxBroadcast/Broadcaster](https:/
 ```bash
 git clone https://github.com/Hydrooxzgen/MCBEXboxBroadcaster.git
 cd MCBEXboxBroadcaster
-pip install -r python/requirements.txt
+pip install -r requirements.txt
 ```
 
 ### 2. 准备配置文件 / Prepare the config
 
-```bash
-cp python/config.yml.example config.yml
-```
+首次运行会在当前目录自动生成 `config.yml`（也可以从 `config.yml.example` 复制）。
 
 编辑 `config.yml`，主要修改以下项：
 
 ```yaml
 session:
-  remoteAddress: 你的服务器公网IP    # 改成你的服务器地址
-  remotePort: auto                  # 端口，通常留 auto
-  visibility: friends               # friends=仅好友可加入（默认）| public=所有人可加入
   sessionInfo:
-    hostName: 服务器名              # 好友列表里显示的名称
+    ip: 你的服务器公网IP       # 改成你的服务器地址（查询服务器成功后会被自动同步）
+    port: 19132                # 服务器端口
+    hostName: 服务器名          # 好友列表里显示的名称
+    worldName: 世界名
+  updateInterval: 30           # 会话刷新间隔（最小 20 秒，Xbox 限速）
+friendSync:
+  autoFollow: true             # 自动回关
+  autoUnfollow: true           # 自动取关
 ```
-
-### 3. 运行 / Run
 
 ```bash
-# 方式一：在仓库根目录直接运行（推荐）/ Option 1: run from the repo root (recommended)
-python main.py config.yml
+# 方式一：直接运行入口 / Option 1: run the entry point (recommended)
+python main.py
 
-# 方式二：进入包目录运行 / Option 2: run inside the package dir
-cd python && python -m mcxboxbroadcast config.yml
+# 方式二：作为模块运行 / Option 2: run as a module
+python -m mcxboxbroadcast
 ```
 
-首次运行会进行**微软账号设备码登录**：终端会打印一个链接和代码，用浏览器打开并输入代码授权即可。Token 会自动缓存（`./cache`），后续自动续期，无需重复登录。
+首次运行会进行**微软账号设备码登录**：终端会打印一个链接和代码，用浏览器打开并输入代码授权即可。Token 会自动缓存（`./cache/cache.json`），后续自动续期，无需重复登录。
 
-On first run you will be asked to sign in with the **Microsoft device-code flow**: open the printed link, enter the code, and authorize. Tokens are cached in `./cache` and auto-refreshed.
+On first run you will be asked to sign in with the **Microsoft device-code flow**: open the printed link, enter the code, and authorize. Tokens are cached in `./cache/cache.json` and auto-refreshed.
 
-> 也可以 `cd python && pip install -e .` 安装为命令行工具，之后直接运行 `mcxboxbroadcast config.yml`。
+> 也可以 `pip install -e .` 安装为命令行工具，之后直接运行 `mcxboxbroadcast`。
 
-> You can also install it as a CLI tool with `cd python && pip install -e .`, then run `mcxboxbroadcast config.yml` directly.
+> You can also install it as a CLI tool with `pip install -e .`, then run `mcxboxbroadcast` directly.
 
 ---
 
@@ -123,10 +123,13 @@ On first run you will be asked to sign in with the **Microsoft device-code flow*
 
 | Command | Description |
 | --- | --- |
-| `quit` / `exit` | 退出程序 / Exits the program |
+| `exit` / `stop` | 退出程序 / Exits the program |
 | `restart` | 重启会话 / Restarts the session |
-| `list` | 列出所有会话 / Lists all sessions |
-| `dump` | 打印当前会话信息 / Dumps the current session data |
+| `dumpsession` | 导出会话响应到 json 文件 / Dumps the session responses to json files |
+| `accounts list` | 列出所有子账号会话 / Lists sub-accounts |
+| `accounts add <id>` | 添加子账号会话 / Adds a sub-account |
+| `accounts remove <id>` | 移除子账号会话 / Removes a sub-account |
+| `version` | 显示版本 / Shows the version |
 | `help` | 显示帮助 / Shows this help |
 
 ---

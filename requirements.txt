@@ -1,0 +1,10 @@
+# HTTP client
+requests>=2.31.0
+# RTA + NetherNet signaling websockets
+websockets>=12.0
+# Config files
+PyYAML>=6.0
+# JWT / ECDSA crypto (XBL request signing, login chain validation)
+cryptography>=42.0
+# NetherNet WebRTC transport
+aiortc>=1.9.0

@@ -1,86 +1,58 @@
-"""Standalone entry point (root copy).
-
-Run from the repository root with::
-
-    python main.py config.yml
-
-This mirrors ``python/mcxboxbroadcast/__main__.py`` but adds a sys.path
-bootstrap so the ``mcxboxbroadcast`` package under ``python/`` can be
-imported when running from the root directory. Config, cache and
-screenshot files are all relative to the current working directory.
-"""
+"""Standalone entry point, ported from Java StandaloneMain.java."""
 
 from __future__ import annotations
 
+import logging
 import os
+import signal
 import sys
-
-# Make the package under python/ importable when running from the repo root
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_PYTHON_DIR = os.path.join(_THIS_DIR, "python")
-if os.path.isdir(_PYTHON_DIR) and _PYTHON_DIR not in sys.path:
-    sys.path.insert(0, _PYTHON_DIR)
-
 import threading
-import time
 
-from mcxboxbroadcast import __version__
-from mcxboxbroadcast.config.config_loader import load_config
-from mcxboxbroadcast.constants import BEDROCK_PROTOCOL_VERSION, BEDROCK_VERSION
-from mcxboxbroadcast.logger import Logger, setup_logging
-from mcxboxbroadcast.notifications.slack_notification_manager import SlackNotificationManager
-from mcxboxbroadcast.ping.ping_util import ping
+from mcxboxbroadcast import constants
+from mcxboxbroadcast.config import load_config
+from mcxboxbroadcast.logger import Logger, setup_console_logging
+from mcxboxbroadcast.notifications import SlackNotificationManager
+from mcxboxbroadcast.ping import ping as ping_server, set_web_ping_enabled
 from mcxboxbroadcast.session_info import SessionInfo
 from mcxboxbroadcast.session_manager import SessionManager
-from mcxboxbroadcast.storage.file_storage_manager import FileStorageManager
+from mcxboxbroadcast.storage import FileStorageManager
+
+logger = Logger("Standalone")
+
+config = None
+session_manager: SessionManager = None
+session_info: SessionInfo = None
+notification_manager = None
+_update_lock = threading.Lock()
 
 
-def _ensure_config(config_file_name: str) -> None:
-    """Create ``config.yml`` from the example template if it doesn't exist."""
-    if os.path.exists(config_file_name):
-        return
-    example = os.path.join(_PYTHON_DIR, "config.yml.example")
-    if os.path.exists(example):
-        try:
-            with open(example, "r", encoding="utf-8") as f:
-                content = f.read()
-            with open(config_file_name, "w", encoding="utf-8") as f:
-                f.write(content)
-            print(f"[MCXboxBroadcast] No config found, created a default one at:")
-            print(f"[MCXboxBroadcast]   {os.path.abspath(config_file_name)}")
-            print(f"[MCXboxBroadcast] Edit it to set your server address, then run again.")
-        except OSError as e:
-            print(f"[MCXboxBroadcast] Failed to create default config: {e}")
+def main() -> None:
+    global config, session_manager, session_info, notification_manager
 
-
-def main(argv: list | None = None) -> int:
-    argv = argv if argv is not None else sys.argv[1:]
-
-    logger = Logger("MCXboxBroadcast")
-    setup_logging(False)
+    setup_console_logging()
+    logging.getLogger().setLevel(logging.INFO)
 
     logger.info(
-        f"Starting MCXboxBroadcast Standalone {__version__} "
-        f"for Bedrock {BEDROCK_VERSION} ({BEDROCK_PROTOCOL_VERSION})"
+        f"Starting MCXboxBroadcast Standalone for Bedrock {constants.MINECRAFT_VERSION} "
+        f"({constants.PROTOCOL_VERSION})"
     )
 
-    config_file_name = argv[0] if argv else "config.yml"
-    _ensure_config(config_file_name)
+    config_file_name = "config.yml"
+
     try:
-        config = load_config(config_file_name, "Standalone")
-    except Exception as e:
-        logger.error(f"Failed to load config: {e}")
-        return 1
+        config = load_config(config_file_name)
+    except Exception as ex:
+        logger.error("Failed to load config", ex)
+        return
 
     logger.set_debug(config.debug_mode)
+    logging.getLogger().setLevel(logging.DEBUG if config.debug_mode else logging.INFO)
 
     # TODO Support multiple notification types
     notification_manager = SlackNotificationManager(logger, config.notifications)
 
     session_manager = SessionManager(
-        FileStorageManager("./cache", "./screenshot.jpg"),
-        notification_manager,
-        logger,
+        FileStorageManager("./cache", "./screenshot.jpg"), notification_manager, logger
     )
     session_manager.set_nether_net_port_range(
         config.session.ice_port_range.min, config.session.ice_port_range.max
@@ -89,156 +61,179 @@ def main(argv: list | None = None) -> int:
     session_info = SessionInfo.from_config(config.session.session_info)
 
     # Fallback to the gamertag if the host name is empty
-    if not session_info.get_host_name():
-        session_info.set_host_name(session_manager.get_gamertag())
+    if not session_info.host_name:
+        session_info.host_name = session_manager.get_gamertag()
+
+    set_web_ping_enabled(config.session.web_query_fallback)
 
     # Sync the session info from the server if needed
-    update_session_info(session_info, config, session_manager)
+    update_session_info(session_info)
 
-    create_session(session_info, config, session_manager, logger)
+    create_session()
 
-    logger.info("Type 'help' for a list of commands, 'quit' to exit")
+    # Start the interactive console command loop
+    console = threading.Thread(target=console_loop, daemon=True, name="Console")
+    console.start()
 
-    # Command input loop on a background thread so the main thread can be
-    # interrupted cleanly by Ctrl+C.
-    stop = threading.Event()
-
-    def _command_loop() -> None:
-        while not stop.is_set():
-            try:
-                line = input().strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                break
-            if not line:
-                continue
-            if line in ("quit", "exit"):
-                logger.info("Shutting down...")
-                session_manager.shutdown()
-                stop.set()
-            elif line == "restart":
-                logger.info("Restarting session...")
-                restart(session_info, config, session_manager, notification_manager, logger)
-            elif line == "list":
-                session_manager.list_sessions()
-            elif line == "dump":
-                session_manager.dump_session()
-            elif line == "help":
-                logger.info("Commands: quit, restart, list, dump, help")
-            else:
-                logger.info(f"Unknown command: {line} (try 'help')")
-
-    threading.Thread(target=_command_loop, name="Console", daemon=True).start()
-
+    # Block until interrupted
     try:
-        while not stop.is_set():
-            time.sleep(1)
-    except KeyboardInterrupt:
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
+    except ValueError:
+        # Not on the main thread (or Windows); fall back to joining forever
+        pass
+    console.join()
+
+
+def console_loop() -> None:
+    for line in sys.stdin:
+        command = line.strip()
+        if not command:
+            continue
+        try:
+            run_command(command)
+        except Exception as ex:
+            logger.error("Failed to execute command", ex)
+
+
+def run_command(command: str) -> None:
+    parts = command.split(" ")
+    offset = 1 if parts[0].lower() == "mcxboxbroadcast" else 0
+    command_node = parts[offset].lower()
+    args = parts[offset + 1 :]
+
+    if command_node in ("stop", "exit", "quit"):
         logger.info("Shutting down...")
-        session_manager.shutdown()
-    return 0
+        try:
+            session_manager.shutdown()
+        finally:
+            os._exit(0)
+    elif command_node == "restart":
+        restart()
+    elif command_node == "dumpsession":
+        logger.info(
+            "Dumping session responses to 'lastSessionResponse.json' and "
+            "'currentSessionResponse.json'"
+        )
+        session_manager.dump_session()
+    elif command_node == "accounts":
+        if not args:
+            logger.warn("Usage:")
+            logger.warn("accounts list")
+            logger.warn("accounts add/remove <sub-session-id>")
+            return
+        sub = args[0].lower()
+        if sub == "list":
+            session_manager.list_sessions()
+        elif sub == "add":
+            session_manager.add_sub_session(args[1])
+        elif sub == "remove":
+            session_manager.remove_sub_session(args[1])
+        else:
+            logger.warn(f"Unknown accounts command: {args[0]}")
+    elif command_node == "version":
+        logger.info("MCXboxBroadcast Standalone (Python port)")
+    elif command_node == "help":
+        logger.info("Available commands:")
+        logger.info("exit - Exit the application")
+        logger.info("restart - Restart the application")
+        logger.info("dumpsession - Dump the current session to json files")
+        logger.info("accounts list - List sub-accounts")
+        logger.info("accounts add <sub-session-id> - Add a sub-account")
+        logger.info("accounts remove <sub-session-id> - Remove a sub-account")
+        logger.info("version - Display the version")
+    else:
+        logger.warn(f"Unknown command: {command_node}")
 
 
-def restart(
-    session_info: SessionInfo,
-    config,
-    session_manager: SessionManager,
-    notification_manager,
-    logger: Logger,
-) -> None:
+def _signal_handler(signum, frame) -> None:
+    logger.info("Shutting down...")
     try:
         session_manager.shutdown()
-
-        # Create a new session manager, but reuse the notification manager as
-        # config hasn't been reloaded
-        new_manager = SessionManager(
-            FileStorageManager("./cache", "./screenshot.jpg"),
-            notification_manager,
-            logger,
-        )
-        new_manager.set_nether_net_port_range(
-            config.session.ice_port_range.min, config.session.ice_port_range.max
-        )
-        create_session(session_info, config, new_manager, logger)
-        globals()["session_manager"] = new_manager
-    except Exception as e:
-        logger.error(f"Failed to restart session: {e}")
+    finally:
+        os._exit(0)
 
 
-def create_session(
-    session_info: SessionInfo,
-    config,
-    session_manager: SessionManager,
-    logger: Logger,
-) -> None:
-    session_manager.restart_callback(
-        lambda: restart(session_info, config, session_manager, session_manager.notification_manager(), logger)
-    )
-    initialized = session_manager.init(
-        session_info, config.friend_sync, config.session.visibility
-    )
+def create_session() -> None:
+    session_manager.restart_callback_(restart)
+    try:
+        initialized = session_manager.init(session_info, config.friend_sync)
+    except Exception as ex:
+        logger.error("Failed to initialize session", ex)
+        return
 
     # If the session failed to initialize, don't start the update loop
+    # We assume an error has already been logged
     if not initialized:
         return
 
+    def update_loop() -> None:
+        update_session_info(session_info)
+        try:
+            # Update the session
+            session_manager.update_session_with(session_info)
+            if config.suppress_session_update_message:
+                session_manager.logger.debug("Updated session!")
+            else:
+                session_manager.logger.info("Updated session!")
+        except Exception as ex:
+            session_manager.logger.error("Failed to update session", ex)
+
     session_manager.scheduled_thread().schedule_with_fixed_delay(
-        lambda: _update_loop(session_info, config, session_manager),
-        config.session.update_interval,
-        config.session.update_interval,
+        update_loop, config.session.update_interval, config.session.update_interval
     )
 
 
-def _update_loop(session_info: SessionInfo, config, session_manager: SessionManager) -> None:
-    update_session_info(session_info, config, session_manager)
-
+def restart() -> None:
+    global session_manager
     try:
-        # Update the session
-        session_manager.update_session(session_info)
-        if config.suppress_session_update_message:
-            session_manager.logger().debug("Updated session!")
-        else:
-            session_manager.logger().info("Updated session!")
-    except Exception as e:
-        session_manager.logger().error(f"Failed to update session: {e}")
+        session_manager.shutdown()
 
-
-def update_session_info(session_info: SessionInfo, config, session_manager: SessionManager) -> None:
-    if not config.session.query_server:
-        return
-
-    try:
-        pong = ping(
-            session_info.get_ip(),
-            session_info.get_port(),
-            timeout=1.5,
-            web_fallback=config.session.web_query_fallback,
+        # Create a new session manager, but reuse the notification manager
+        # as config hasn't been reloaded
+        session_manager = SessionManager(
+            FileStorageManager("./cache", "./screenshot.jpg"), notification_manager, logger
+        )
+        session_manager.set_nether_net_port_range(
+            config.session.ice_port_range.min, config.session.ice_port_range.max
         )
 
+        create_session()
+    except Exception as ex:
+        logger.error("Failed to restart session", ex)
+
+
+def update_session_info(session_info: SessionInfo) -> None:
+    if not config.session.query_server:
+        return
+    try:
+        pong = ping_server(session_info.ip, session_info.port, 1500).result(timeout=3)
+
         # Update the session information
-        session_info.set_host_name(pong.motd2)
-        session_info.set_world_name(pong.motd1)
-        session_info.set_players(pong.player_count)
-        session_info.set_max_players(pong.max_player_count)
+        session_info.host_name = pong.sub_motd
+        session_info.world_name = pong.motd
+        session_info.players = pong.player_count
+        session_info.max_players = pong.maximum_player_count
 
         # Fallback to the gamertag if the host name is empty
-        if not session_info.get_host_name():
-            session_info.set_host_name(session_manager.get_gamertag())
-    except Exception as e:
+        if not session_info.host_name:
+            session_info.host_name = session_manager.get_gamertag()
+    except Exception as ex:
         if config.session.config_fallback:
-            session_manager.logger().error(
-                "Failed to ping server, falling back to config values", exc_info=e
+            session_manager.logger.error(
+                "Failed to ping server, falling back to config values", ex
             )
-            session_info.set_host_name(config.session.session_info.host_name)
-            session_info.set_world_name(config.session.session_info.world_name)
-            session_info.set_players(config.session.session_info.players)
-            session_info.set_max_players(config.session.session_info.max_players)
+            session_info.host_name = config.session.session_info.host_name
+            session_info.world_name = config.session.session_info.world_name
+            session_info.players = config.session.session_info.players
+            session_info.max_players = config.session.session_info.max_players
 
             # Fallback to the gamertag if the host name is empty
-            if not session_info.get_host_name():
-                session_info.set_host_name(session_manager.get_gamertag())
+            if not session_info.host_name:
+                session_info.host_name = session_manager.get_gamertag()
         else:
-            session_manager.logger().error(f"Failed to ping server: {e}")
+            session_manager.logger.error("Failed to ping server", ex)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
