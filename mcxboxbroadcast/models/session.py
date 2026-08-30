@@ -173,14 +173,14 @@ class SessionProperties:
     custom: SessionCustomProperties
 
     def to_json(self) -> dict:
-        return {
-            "system": {
+        out = {"custom": self.custom.to_json()}
+        if self.system is not None:
+            out["system"] = {
                 "joinRestriction": self.system.join_restriction,
                 "readRestriction": self.system.read_restriction,
                 "closed": self.system.closed,
-            },
-            "custom": self.custom.to_json(),
-        }
+            }
+        return out
 
 
 @dataclass
@@ -215,6 +215,11 @@ class JoinSessionRequest:
 class CreateSessionRequest(JoinSessionRequest):
     properties: SessionProperties
 
+    # NOTE: "friends of friends" joinability is NOT supported by the Xbox
+    # MinecraftLobby template - the session directory only exposes the session
+    # to the owner's direct friends (followed), and the template's
+    # 'userAuthorizationStyle' capability forbids loosening the restrictions.
+    # Verified experimentally: FOF players cannot see or join the session.
     def __init__(self, session_info, nonces: dict[str, str]) -> None:
         # session_info is an ExpandedSessionInfo
         super().__init__(session_info.xuid, session_info.connection_id)
