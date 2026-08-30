@@ -80,7 +80,7 @@ class RedirectSession:
         self._closed = False
 
     def handle_packet(self, packet_id: int, body: bytes) -> None:
-        self.peer.logger.info(f"Bedrock packet from client: id={packet_id} len={len(body)}")
+        self.peer.logger.verbose(f"Bedrock packet from client: id={packet_id} len={len(body)}")
         if packet_id == bp.PACKET_REQUEST_NETWORK_SETTINGS:
             self._handle_request_network_settings(body)
         elif packet_id == bp.PACKET_LOGIN:
@@ -95,7 +95,7 @@ class RedirectSession:
     def _handle_request_network_settings(self, body: bytes) -> None:
         client_protocol = bp.parse_request_network_settings(body)
         server_protocol = self.server.protocol_version
-        self.logger.info(f"RequestNetworkSettings: client protocol={client_protocol}")
+        self.logger.verbose(f"RequestNetworkSettings: client protocol={client_protocol}")
 
         # The client normally prevents you connecting to a server with a
         # different protocol number, but double check here
@@ -120,7 +120,7 @@ class RedirectSession:
 
         try:
             protocol, auth_jwt, client_jwt = bp.parse_login(body)
-            self.logger.info(f"Login packet: client protocol={protocol}")
+            self.logger.verbose(f"Login packet: client protocol={protocol}")
             if protocol != self.server.protocol_version:
                 self.disconnect(
                     f"disconnectionScreen.outdatedServer (client={protocol}, "
@@ -142,7 +142,7 @@ class RedirectSession:
                         header = _json.loads(
                             base64.urlsafe_b64decode(client_jwt.split(".")[0] + "=" * 4)
                         )
-                        self.logger.info(
+                        self.logger.verbose(
                             f"Client data JWT alg={header.get('alg')} keys={sorted(header.keys())}"
                         )
                     except Exception:
@@ -189,7 +189,7 @@ class RedirectSession:
 
     def _handle_resource_pack_response(self, body: bytes) -> None:
         status, response_type = bp.parse_resource_pack_client_response(body)
-        self.logger.info(f"ResourcePackClientResponse: status={status} ({response_type})")
+        self.logger.verbose(f"ResourcePackClientResponse: status={status} ({response_type})")
         # Flow: ResourcePacksInfo -> HAVE_ALL_PACKS ("downloadingfinished")
         #       ResourcePackStack  -> COMPLETED ("resourcepackstackfinished")
         if status == bp.RPC_STATUS_HAVE_ALL_PACKS:
@@ -206,7 +206,7 @@ class RedirectSession:
         self.peer.send_raw_packet(
             bp.start_game(info.host_name, info.world_name, info.players, info.max_players)
         )
-        self.logger.info("StartGame sent, waiting for the client to settle before Transfer...")
+        self.logger.verbose("StartGame sent, waiting for the client to settle before Transfer...")
 
         def send_transfer() -> None:
             if self.peer.closed or self._closed:
@@ -214,10 +214,8 @@ class RedirectSession:
             info = self.server.session_info
             self.peer.send_raw_packet(bp.transfer(info.ip, info.port))
             self.server.logger.info(
-                f"Transferred bedrock client {self.identity_data.get('displayName', '?')} "
-                f"({self.identity_data.get('XUID', '?')}) to target server "
-                f"({info.ip}:{info.port}). The client now connects to that address "
-                f"DIRECTLY - it must be publicly reachable."
+                f"Transferred player {self.identity_data.get('displayName', '?')} "
+                f"to server {info.ip}:{info.port}"
             )
             try:
                 from datetime import datetime, timezone
@@ -283,7 +281,7 @@ class NetherNetPeer:
 
         def on_connection_state():  # aiortc emits this event with no arguments
             state = self.pc.connectionState
-            self.logger.info(
+            self.logger.verbose(
                 f"Connection {self.connection_id} WebRTC state: {state}"
             )
             if state in ("failed", "closed", "disconnected"):
@@ -308,7 +306,7 @@ class NetherNetPeer:
                 self.remote_network_id,
                 Signal(SIGNAL_ANSWER, self.connection_id, augmented, ""),
             )
-            self.logger.info(
+            self.logger.verbose(
                 f"Sent WebRTC answer for connection {self.connection_id} to client"
             )
             for candidate in extract_candidates(self.pc.localDescription.sdp):
@@ -340,7 +338,7 @@ class NetherNetPeer:
 
     # -- data channels ---------------------------------------------------
     def _on_datachannel(self, channel) -> None:
-        self.logger.info(f"Data channel open: {channel.label}")
+        self.logger.verbose(f"Data channel open: {channel.label}")
         if channel.label == "ReliableDataChannel":
             self.reliable_channel = channel
         elif channel.label == "UnreliableDataChannel":
@@ -364,7 +362,7 @@ class NetherNetPeer:
             self._pending_frames.clear()
 
     def _handle_payload(self, payload: bytes) -> None:
-        self.logger.info(
+        self.logger.verbose(
             "Client payload (%d bytes, compressed=%s): %s"
             % (len(payload), self.compressed, payload[:48].hex())
         )
@@ -380,7 +378,7 @@ class NetherNetPeer:
             if self.session is not None:
                 self.session.handle_packet(packet_id, body)
             else:
-                self.logger.info(
+                self.logger.verbose(
                     f"Buffering bedrock packet {packet_id} ({len(body)} bytes) - "
                     "session not fully established yet"
                 )
@@ -422,11 +420,11 @@ class NetherNetPeer:
             return
         packet_id, _ = bp.decode_packet_body(raw_packet_body)
         if packet_id in (bp.PACKET_START_GAME, bp.PACKET_TRANSFER):
-            self.logger.info(
+            self.logger.verbose(
                 f"Sending bedrock packet: id={packet_id} body={raw_packet_body.hex()}"
             )
         else:
-            self.logger.info(f"Sending bedrock packet: id={packet_id} compressed={self.compressed}")
+            self.logger.verbose(f"Sending bedrock packet: id={packet_id} compressed={self.compressed}")
         payload = bp.encode_batch([raw_packet_body], compressed=self.compressed)
         self._send_payload(payload)
 
@@ -504,7 +502,7 @@ class NetherNetServer:
         from ..asyncio_runner import shared_runner
 
         shared_runner().run(self.signaling.wait_ready(), timeout=20)
-        self.logger.info(f"NetherNet Broadcaster started on ID: {self.local_network_id}")
+        self.logger.verbose(f"NetherNet Broadcaster started on ID: {self.local_network_id}")
 
     def ice_servers(self) -> list[dict]:
         return self._ice_servers

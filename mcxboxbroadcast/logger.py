@@ -10,6 +10,16 @@ import logging
 import traceback
 
 
+FULL_LOG = False
+
+
+def set_full_log(enabled: bool) -> None:
+    """--full-log: show every protocol/transport detail. Default: basic only."""
+    global FULL_LOG
+    FULL_LOG = enabled
+    logging.getLogger().setLevel(logging.DEBUG if enabled else logging.INFO)
+
+
 class Logger:
     def __init__(self, prefix: str = "", debug: bool = False) -> None:
         self._prefix = prefix
@@ -42,6 +52,11 @@ class Logger:
         if self._debug_enabled:
             logging.debug(self._fmt(message))
 
+    def verbose(self, message: str) -> None:
+        """Detailed protocol/transport logging - only with --full-log."""
+        if FULL_LOG:
+            logging.info(self._fmt(message))
+
     @staticmethod
     def get_stack_trace(ex: BaseException) -> str:
         return "".join(traceback.format_exception(type(ex), ex, ex.__traceback__))
@@ -53,11 +68,12 @@ def setup_console_logging() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
-    # aiortc/aioice probes unusable link-local addresses on Windows; the bind
-    # failures are harmless noise with dynamic logger names - filter by text
-    class _BindNoiseFilter(logging.Filter):
-        def filter(self, record: logging.LogRecord) -> bool:
-            return "Could not bind to" not in record.getMessage()
 
-    for handler in logging.getLogger().handlers:
-        handler.addFilter(_BindNoiseFilter())
+
+def _install_noise_filters() -> None:
+    """Drop third-party transport noise unless --full-log is enabled."""
+    if FULL_LOG:
+        return
+    # aioice (used by aiortc) logs every ICE candidate/pair check at INFO;
+    # silence the whole library in basic mode
+    logging.getLogger("aioice").setLevel(logging.WARNING)

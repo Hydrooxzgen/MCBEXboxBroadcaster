@@ -10,7 +10,7 @@ import threading
 
 from mcxboxbroadcast import constants
 from mcxboxbroadcast.config import load_config
-from mcxboxbroadcast.logger import Logger, setup_console_logging
+from mcxboxbroadcast.logger import Logger, set_full_log, setup_console_logging, _install_noise_filters
 from mcxboxbroadcast.notifications import SlackNotificationManager
 from mcxboxbroadcast.ping import ping as ping_server, set_web_ping_enabled
 from mcxboxbroadcast.session_info import SessionInfo
@@ -30,7 +30,8 @@ def main() -> None:
     global config, session_manager, session_info, notification_manager
 
     setup_console_logging()
-    logging.getLogger().setLevel(logging.INFO)
+    set_full_log("--full-log" in sys.argv)
+    _install_noise_filters()
 
     logger.info(
         f"Starting MCXboxBroadcast Standalone for Bedrock {constants.MINECRAFT_VERSION} "
@@ -45,8 +46,9 @@ def main() -> None:
         logger.error("Failed to load config", ex)
         return
 
-    logger.set_debug(config.debug_mode)
-    logging.getLogger().setLevel(logging.DEBUG if config.debug_mode else logging.INFO)
+    if config.debug_mode:
+        logger.set_debug(True)
+        set_full_log(True)  # debug-mode implies full protocol logging
 
     # TODO Support multiple notification types
     notification_manager = SlackNotificationManager(logger, config.notifications)
@@ -176,10 +178,7 @@ def create_session() -> None:
         try:
             # Update the session
             session_manager.update_session_with(session_info)
-            if config.suppress_session_update_message:
-                session_manager.logger.debug("Updated session!")
-            else:
-                session_manager.logger.info("Updated session!")
+            session_manager.logger.verbose("Updated session!")
         except requests.RequestException as ex:
             # Transient Xbox Live hiccups recover on the next cycle
             session_manager.logger.warn(f"Session update hit a network error, will retry: {ex}")

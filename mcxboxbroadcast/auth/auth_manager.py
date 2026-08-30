@@ -279,7 +279,7 @@ class BedrockAuthManager:
         )
 
     def _refresh_device_token(self) -> XblDeviceToken:
-        logger.info("[auth] 1/6 Requesting Xbox device token...")
+        logger.verbose("[auth] 1/6 Requesting Xbox device token...")
         url = req.DEVICE_AUTH_URL
         proof_key = self._proof_key()
         body = {
@@ -313,7 +313,7 @@ class BedrockAuthManager:
         )
 
     def _refresh_sisu_tokens(self) -> None:
-        logger.info("[auth] 2/6 Requesting SISU tokens (user/title/XSTS)...")
+        logger.verbose("[auth] 2/6 Requesting SISU tokens (user/title/XSTS)...")
         with self._sisu_lock:
             device_token = self.xbl_device_token.get_up_to_date()
             msa_token = self.msa_token.get_up_to_date()
@@ -395,7 +395,7 @@ class BedrockAuthManager:
         )
 
     def _refresh_xbox_live_xsts(self) -> XblXstsToken:
-        logger.info("[auth] 3/6 Requesting Xbox Live XSTS token...")
+        logger.verbose("[auth] 3/6 Requesting Xbox Live XSTS token...")
         device_token = self.xbl_device_token.get_up_to_date()
         user_token = self.xbl_user_token.get_up_to_date()
         title_token = self.xbl_title_token.get_up_to_date()
@@ -408,15 +408,15 @@ class BedrockAuthManager:
         )
 
     def _refresh_profile(self) -> CachedProfileInfo:
-        logger.info("[auth] 6/6 Fetching Xbox profile...")
+        logger.verbose("[auth] 6/6 Fetching Xbox profile...")
         return req.request_profile(self._http, self.xbox_live_xsts_token.get_up_to_date())
 
     def _refresh_play_fab_token(self) -> PlayFabToken:
-        logger.info("[auth] 4/6 Logging in to PlayFab...")
+        logger.verbose("[auth] 4/6 Logging in to PlayFab...")
         return req.request_play_fab_login(self._http, self.play_fab_xsts_token.get_up_to_date())
 
     def _refresh_minecraft_session(self) -> MinecraftSession:
-        logger.info("[auth] 5/6 Starting Minecraft session...")
+        logger.verbose("[auth] 5/6 Starting Minecraft session...")
         return req.request_minecraft_session(
             self._http,
             self.play_fab_token.get_up_to_date(),

@@ -121,7 +121,7 @@ class RtaWebsocketClient:
             return
         msg_type = parts[0]
         if msg_type == 1:  # Subscribe
-            logger.info(f"RTA Websocket [{self._prefix}] connected and subscribed")
+            logger.verbose(f"RTA Websocket [{self._prefix}] connected and subscribed")
             if isinstance(parts, list) and len(parts) > 4 and isinstance(parts[4], dict):
                 connection_id = parts[4].get("ConnectionId")
                 if connection_id and self._is_first_connection:
@@ -139,7 +139,7 @@ class RtaWebsocketClient:
         elif msg_type == 2:  # Unsubscribe
             logger.debug(f"RTA Websocket [{self._prefix}] unsubscribed: {message}")
         elif msg_type == 3:  # Event
-            logger.info(f"RTA Websocket [{self._prefix}] event received")
+            logger.verbose(f"RTA Websocket [{self._prefix}] event received")
             data = parts[2] if len(parts) > 2 else {}
             if isinstance(data, dict):
                 try:
