@@ -86,7 +86,7 @@ class SessionManagerCore:
         if self.initialized:
             raise SessionCreationException("Already initialized!")
 
-        self.logger.info("Starting SessionManager...")
+        self.logger.verbose("Starting SessionManager...")
 
         # Make sure we are logged in and get info
         try:
@@ -338,7 +338,7 @@ class SessionManagerCore:
                 "clients will NOT be able to join the session!"
             )
         else:
-            self.logger.info(
+            self.logger.verbose(
                 f"Session connection info: NetherNetId={self.session_info.nether_net_id} "
                 f"PmsgId={self.session_info.pmsg_id}"
             )
