@@ -48,51 +48,24 @@ class FriendManager:
         people: list[Person] = []
         token = self.sessionManager.get_token_header()
 
-        # People following us
         last_response = ""
         try:
             response = http.get(
                 self.httpClient,
-                constants.FOLLOWERS,
-                {**_headers(token), "x-xbl-contract-version": "5", "accept-language": "en-GB"},
+                constants.FRIENDS,
+                {**_headers(token), "x-xbl-contract-version": "7", "accept-language": "en-GB"},
             )
             last_response = response.text
             if last_response:
-                follower_response = FollowerResponse.from_json(response.json())
-                if follower_response.people is not None:
-                    people.extend(follower_response.people)
+                friends_response = FollowerResponse.from_json(response.json())
+                if friends_response.people is not None:
+                    people.extend(friends_response.people)
         except (ValueError, requests.RequestException) as ex:
-            self.logger.debug(f"Follower request response: {last_response}")
+            self.logger.debug(f"Friends request response: {last_response}")
             raise XboxFriendsError(str(ex))
 
-        # People we are following
-        last_response = ""
-        try:
-            response = http.get(
-                self.httpClient,
-                constants.SOCIAL,
-                {**_headers(token), "x-xbl-contract-version": "5", "accept-language": "en-GB"},
-            )
-            last_response = response.text
-            if last_response:
-                social_response = FollowerResponse.from_json(response.json())
-                if social_response.people is not None:
-                    people.extend(social_response.people)
-        except (ValueError, requests.RequestException) as ex:
-            self.logger.debug(f"Social request response: {last_response}")
-            raise XboxFriendsError(str(ex))
-
-        # Merge the 2 lists together
-        out_people: dict[str, Person] = {}
-        for person in people:
-            if person.xuid in out_people:
-                out_people[person.xuid] = out_people[person.xuid].merge(person)
-            else:
-                out_people[person.xuid] = person
-
-        out_list = list(out_people.values())
-        self._last_friend_cache = out_list
-        return out_list
+        self._last_friend_cache = people
+        return people
 
     def add(self, xuid: str, gamertag: str) -> None:
         with self._to_add_lock:
@@ -112,11 +85,12 @@ class FriendManager:
             response = http.get(
                 self.httpClient,
                 constants.PEOPLE % xuid,
-                _headers(self.sessionManager.get_token_header()),
+                {**_headers(self.sessionManager.get_token_header()), "x-xbl-contract-version": "3"},
             )
-            status = FriendStatusResponse.from_json(response.json())
-            if status.is_following_caller and status.is_followed_by_caller:
-                return False
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("isFriend", False):
+                    return False
         except (ValueError, requests.RequestException) as ex:
             # Debug log it failed and assume we aren't friends
             self.logger.debug(f"Failed to check if {gamertag} ({xuid}) is a friend: {ex}")
@@ -128,7 +102,7 @@ class FriendManager:
         # Try and get the gamertag from the cache if it wasn't provided
         if gamertag is None:
             if self._last_friend_cache is not None:
-                found = next((p for p in self._last_friend_cache if p.xuid == xuid), None)
+                found = next((p for p in self.last_friend_cache() if p.xuid == xuid), None)
                 gamertag = found.gamertag if found else "Unknown"
             else:
                 gamertag = "Unknown"
@@ -141,7 +115,9 @@ class FriendManager:
         self._call_internal_process()
 
     def init(self, friend_sync_config: FriendSyncConfig) -> None:
-        self._should_accept_pending_requests = friend_sync_config.auto_follow
+        self._should_accept_pending_requests = getattr(
+            friend_sync_config, "auto_friend", getattr(friend_sync_config, "auto_follow", True)
+        )
 
         # Initialize the auto friend sync if enabled
         self._init_auto_friend(friend_sync_config)
@@ -211,43 +187,9 @@ class FriendManager:
 
     def _init_auto_friend(self, friend_sync_config: FriendSyncConfig) -> None:
         self._initial_invite = friend_sync_config.initial_invite
-        if friend_sync_config.auto_follow or friend_sync_config.auto_unfollow:
-
-            def sync() -> None:
-                try:
-                    added_count = 0
-                    removed_count = 0
-                    for person in self.get():
-                        # Make sure we are not targeting a subaccount (eg: split screen)
-                        if self._is_guest_account(person.xuid):
-                            continue
-
-                        # Follow the person back
-                        if (
-                            friend_sync_config.auto_follow
-                            and person.is_following_caller
-                            and not person.is_followed_by_caller
-                        ):
-                            self.add(person.xuid, person.display_name)
-                            added_count += 1
-
-                        # Unfollow the person
-                        if (
-                            friend_sync_config.auto_unfollow
-                            and not person.is_following_caller
-                            and person.is_followed_by_caller
-                        ):
-                            self.remove(person.xuid, person.display_name)
-                            removed_count += 1
-                except Exception as ex:
-                    self.logger.error("Failed to sync friends", ex)
-                else:
-                    self.logger.info(
-                        f"Friend sync finished: added {added_count}, removed {removed_count}"
-                    )
-
+        if getattr(friend_sync_config, "auto_friend", True):
             self.sessionManager.scheduled_thread().schedule_with_fixed_delay(
-                sync,
+                self.accept_pending_friend_requests,
                 friend_sync_config.update_interval,
                 friend_sync_config.update_interval,
             )
@@ -270,134 +212,145 @@ class FriendManager:
     def _internal_process(self) -> None:
         retry_after = 0
 
+        # Initialize the cache if it is None
         if self._last_friend_cache is None:
             self._last_friend_cache = []
 
         # If we have friends to add then add them
-        with self._to_add_lock:
-            to_process = dict(self._to_add)
-        for xuid, gamertag in to_process.items():
-            try:
-                response = http.put(
-                    self.httpClient,
-                    constants.PEOPLE % xuid,
-                    _headers(self.sessionManager.get_token_header()),
-                )
-                if response.status_code == 204:
-                    with self._to_add_lock:
-                        self._to_add.pop(xuid, None)
-                    self.logger.info(f"Added {gamertag} ({xuid}) as a friend")
-                    self.send_invite(xuid)
-                    # Update the user in the cache
-                    friend = next(
-                        (p for p in self._last_friend_cache if p.xuid == xuid), None
+        if self._to_add:
+            with self._to_add_lock:
+                to_process = dict(self._to_add)
+            for xuid, gamertag in to_process.items():
+                try:
+                    response = http.put(
+                        self.httpClient,
+                        constants.FRIEND % xuid,
+                        _headers(self.sessionManager.get_token_header()),
                     )
-                    if friend is not None:
-                        friend.is_followed_by_caller = True
-                elif response.status_code == 429:
-                    retry_header = response.headers.get("Retry-After")
-                    if retry_header is not None:
-                        try:
-                            retry_after = int(retry_header)
-                        except ValueError:
-                            pass
-                    self.logger.debug(
-                        f"Failed to add {gamertag} ({xuid}) as a friend: "
-                        f"({response.status_code}) {response.text}"
-                    )
-                    # Break out of the loop, so we don't try to add more friends
-                    break
-                elif response.status_code == 400:
-                    modify = FriendModifyResponse.from_json(response.json())
-                    if modify.code == 1028:
-                        self.logger.error(
-                            f"Friend list full, unable to add {gamertag} ({xuid}) as a friend"
-                        )
-                        break
-                    self.logger.warn(
-                        f"Failed to add {gamertag} ({xuid}) as a friend: "
-                        f"({response.status_code}) {response.text}"
-                    )
-                else:
-                    modify = FriendModifyResponse.from_json(response.json())
-
-                    # 1011 - The requested friend operation was forbidden.
-                    # 1015 - An invalid request was attempted.
-                    # 1028 - The attempted People request was rejected because it would exceed the People list limit.
-                    # 1039 - Request could not be completed due to another request taking precedence.
-                    # 1049 - Target user privacy settings do not allow friend requests to be received.
-
-                    if modify.code == 1028:
-                        self.logger.error(
-                            f"Friend list full, unable to add {gamertag} ({xuid}) as a friend"
-                        )
-                    elif modify.code in (1011, 1049):
+                    if response.status_code == 200:
+                        # The request was successful so remove them from the list
                         with self._to_add_lock:
                             self._to_add.pop(xuid, None)
-                        # Remove these people from following us (block and unblock)
-                        try:
-                            self.force_unfollow(xuid)
-                        except Exception as ex:
-                            self.logger.error("Failed to force unfollow user", ex)
-                        self.logger.warn(
-                            f"Removed {gamertag} ({xuid}) as a friend due to restrictions on their account"
-                        )
-                        self.sessionManager.notification_manager().send_friend_restriction_notification(
-                            gamertag, xuid
-                        )
-                    else:
-                        self.logger.warn(
+
+                        add_response = FriendAddResponse.from_json(response.json())
+                        if add_response.is_friend:
+                            # Let the user know we added a friend
+                            self.logger.info(f"Added {gamertag} ({xuid}) as a friend")
+                            self.send_invite(xuid)
+
+                            # Add the user to the cache
+                            if not any(p.xuid == xuid for p in self._last_friend_cache):
+                                self._last_friend_cache.append(
+                                    Person(xuid=xuid, gamertag=gamertag, is_friend=True)
+                                )
+                        else:
+                            # They hadn't sent us a request so we sent them one
+                            self.logger.info(f"Sent a friend request to {gamertag} ({xuid})")
+                    elif response.status_code == 429:
+                        retry_header = response.headers.get("Retry-After")
+                        if retry_header is not None:
+                            try:
+                                retry_after = int(retry_header)
+                            except ValueError:
+                                pass
+                        self.logger.debug(
                             f"Failed to add {gamertag} ({xuid}) as a friend: "
                             f"({response.status_code}) {response.text}"
                         )
-            except requests.RequestException as ex:
-                self.logger.error(f"Failed to add {gamertag} ({xuid}) as a friend: {ex}")
-                break
+                        # Break out of the loop, so we don't try to add more friends
+                        break
+                    else:
+                        modify = None
+                        try:
+                            modify = FriendModifyResponse.from_json(response.json())
+                        except Exception:
+                            pass
+
+                        # 1011 - The requested friend operation was forbidden.
+                        # 1015 - An invalid request was attempted.
+                        # 1028 - The attempted People request was rejected because it would exceed the People list limit.
+                        # 1039 - Request could not be completed due to another request taking precedence.
+                        # 1049 - Target user privacy settings do not allow friend requests to be received.
+
+                        if modify is not None and modify.code == 1028:
+                            self.logger.error(
+                                f"Friend list full, unable to add {gamertag} ({xuid}) as a friend"
+                            )
+                            # Nothing else can be added so clear the list
+                            with self._to_add_lock:
+                                self._to_add.clear()
+                            break
+                        elif modify is not None and modify.code in (1011, 1049):
+                            with self._to_add_lock:
+                                self._to_add.pop(xuid, None)
+
+                            # Decline their friend request so we don't keep trying to accept it
+                            try:
+                                self.decline_friend_request(xuid)
+                            except Exception as ex:
+                                self.logger.debug(
+                                    f"Failed to decline friend request from {gamertag} ({xuid}): {ex}"
+                                )
+
+                            self.logger.warn(
+                                f"Unable to add {gamertag} ({xuid}) as a friend due to restrictions on their account"
+                            )
+                            self.sessionManager.notification_manager().send_friend_restriction_notification(
+                                gamertag, xuid
+                            )
+                        else:
+                            self.logger.warn(
+                                f"Failed to add {gamertag} ({xuid}) as a friend: "
+                                f"({response.status_code}) {response.text}"
+                            )
+                except Exception as ex:
+                    self.logger.error(f"Failed to add {gamertag} ({xuid}) as a friend: {ex}")
+                    break
 
         # If we have friends to remove then remove them
         # Note: This can be run even if add hits the rate limit as it seems to be separate
-        with self._to_add_lock:
-            to_remove_process = dict(self._to_remove)
-        for xuid, gamertag in to_remove_process.items():
-            try:
-                response = http.delete(
-                    self.httpClient,
-                    constants.PEOPLE % xuid,
-                    _headers(self.sessionManager.get_token_header()),
-                )
-                if response.status_code == 204:
-                    with self._to_add_lock:
-                        self._to_remove.pop(xuid, None)
-                    self.logger.info(f"Removed {gamertag} ({xuid}) as a friend")
-                    try:
-                        self.sessionManager.storage_manager().player_history().clear(xuid)
-                    except IOError:
-                        pass
-                    friend = next(
-                        (p for p in self._last_friend_cache if p.xuid == xuid), None
+        if self._to_remove:
+            with self._to_add_lock:
+                to_remove_process = dict(self._to_remove)
+            for xuid, gamertag in to_remove_process.items():
+                try:
+                    response = http.delete(
+                        self.httpClient,
+                        constants.FRIEND % xuid,
+                        _headers(self.sessionManager.get_token_header()),
                     )
-                    if friend is not None:
-                        friend.is_followed_by_caller = False
-                elif response.status_code == 429:
-                    retry_header = response.headers.get("Retry-After")
-                    if retry_header is not None:
+                    if response.status_code in (200, 204):
+                        with self._to_add_lock:
+                            self._to_remove.pop(xuid, None)
+                        self.logger.info(f"Removed {gamertag} ({xuid}) as a friend")
                         try:
-                            retry_after = int(retry_header)
-                        except ValueError:
+                            self.sessionManager.storage_manager().player_history().clear(xuid)
+                        except IOError:
                             pass
-                    self.logger.debug(
-                        f"Failed to remove {gamertag} ({xuid}) as a friend: "
-                        f"({response.status_code}) {response.text}"
-                    )
+                        # Remove the user from the cache
+                        self._last_friend_cache = [
+                            p for p in self._last_friend_cache if p.xuid != xuid
+                        ]
+                    elif response.status_code == 429:
+                        retry_header = response.headers.get("Retry-After")
+                        if retry_header is not None:
+                            try:
+                                retry_after = int(retry_header)
+                            except ValueError:
+                                pass
+                        self.logger.debug(
+                            f"Failed to remove {gamertag} ({xuid}) as a friend: "
+                            f"({response.status_code}) {response.text}"
+                        )
+                        break
+                    else:
+                        self.logger.warn(
+                            f"Failed to remove {gamertag} ({xuid}) as a friend: "
+                            f"({response.status_code}) {response.text}"
+                        )
+                except Exception as ex:
+                    self.logger.error(f"Failed to remove {gamertag} ({xuid}) as a friend: {ex}")
                     break
-                else:
-                    self.logger.warn(
-                        f"Failed to remove {gamertag} ({xuid}) as a friend: "
-                        f"({response.status_code}) {response.text}"
-                    )
-            except requests.RequestException as ex:
-                self.logger.error(f"Failed to remove {gamertag} ({xuid}) as a friend: {ex}")
-                break
 
         # If we still have friends to add or remove then schedule another run after the retry after time
         with self._to_add_lock:
@@ -407,22 +360,15 @@ class FriendManager:
                 self._internal_process, retry_after
             )
 
-    def force_unfollow(self, xuid: str) -> None:
+    def decline_friend_request(self, xuid: str) -> None:
+        """Decline a friend request from a user."""
         response = http.delete(
             self.httpClient,
-            constants.FOLLOWER % xuid,
+            constants.FRIEND % xuid,
             _headers(self.sessionManager.get_token_header()),
         )
-        if response.status_code == 204:
-            # Remove the user from the cache
-            if self._last_friend_cache is not None:
-                self._last_friend_cache = [p for p in self._last_friend_cache if p.xuid != xuid]
-            try:
-                self.sessionManager.storage_manager().player_history().clear(xuid)
-            except IOError:
-                pass
-        else:
-            raise Exception(f"{response.status_code}: {response.text}")
+        if response.status_code not in (200, 204):
+            raise RuntimeError(f"{response.status_code}: {response.text}")
 
     def last_friend_cache(self) -> list[Person]:
         if self._last_friend_cache is None:
@@ -442,52 +388,27 @@ class FriendManager:
             # Get the pending friend requests
             response = http.get(
                 self.httpClient,
-                "https://peoplehub.xboxlive.com/users/me/people/friendrequests(received)",
+                constants.FRIEND_REQUESTS,
                 {**_headers(token), "x-xbl-contract-version": "7", "accept-language": "en-GB"},
             )
-            friend_request_response = FriendRequestResponse.from_json(response.json())
+            friend_request_response = FollowerResponse.from_json(response.json())
 
             # We got no pending friend requests returned
-            if friend_request_response.people is None:
+            if friend_request_response is None or friend_request_response.people is None:
                 return
 
-            self.logger.info(
-                f"Found {len(friend_request_response.people)} pending friend request(s)"
-            )
-
-            xuids = [p.xuid for p in friend_request_response.people]
-
-            # Don't try and accept if there are no requests
-            if not xuids:
-                return
-
-            accepted_xuids: list[str] = []
-
-            # Accept the friend requests, bulk seemed to have issues so 1 by 1
-            for xuid in xuids:
-                accept_response = http.put(
-                    self.httpClient,
-                    f"https://social.xboxlive.com/users/me/people/friends/v2/xuid({xuid})",
-                    _headers(token),
-                )
-                accept = FriendRequestAcceptResponse.from_json(accept_response.json())
-                if accept.is_friend:
-                    accepted_xuids.append(xuid)
-
-            # If we don't have any updated people then we don't need to do anything else
-            if not accepted_xuids:
-                return
-
-            # Let the user know we accepted the friend requests
-            for xuid in accepted_xuids:
-                friend = next(
-                    (p for p in friend_request_response.people or [] if p.xuid == xuid), None
-                )
-                if friend is None:
+            # Add them through the normal process to handle rate limits
+            for person in friend_request_response.people:
+                # Make sure we are not targeting a subaccount (eg: split screen)
+                if self._is_guest_account(person.xuid):
                     continue
-                self.logger.info(f"Added {friend.gamertag} ({xuid}) as a friend")
-                self.send_invite(xuid)
-        except (ValueError, requests.RequestException) as ex:
+
+                with self._to_add_lock:
+                    already_in_to_add = person.xuid in self._to_add
+
+                if not already_in_to_add:
+                    self.add(person.xuid, person.gamertag)
+        except Exception as ex:
             self.logger.error("Failed to accept friend requests", ex)
 
     def send_invite(self, xuid: str) -> None:

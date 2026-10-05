@@ -86,11 +86,27 @@ class RedirectSession:
         elif packet_id == bp.PACKET_LOGIN:
             self._handle_login(body)
         elif packet_id == bp.PACKET_CLIENT_CACHE_STATUS:
-            pass
+            self.logger.verbose("ClientCacheStatus received from client")
         elif packet_id == bp.PACKET_RESOURCE_PACK_CLIENT_RESPONSE:
             self._handle_resource_pack_response(body)
+        elif packet_id == 156:
+            try:
+                offset = 0
+                v_type, offset = bp.read_varint(body, offset)
+                severity, offset = bp.read_varint(body, offset)
+                cause_id, offset = bp.read_varint(body, offset)
+                msg_len, offset = bp.read_varuint(body, offset)
+                context = body[offset : offset + msg_len].decode("utf-8", errors="replace")
+                self.logger.error(
+                    f"CLIENT PACKET VIOLATION WARNING (156): cause_packet_id={cause_id} "
+                    f"type={v_type} severity={severity} context={context!r}"
+                )
+            except Exception as ex:
+                self.logger.error(
+                    f"PacketViolationWarning (156) received: raw_hex={body.hex()} err={ex}"
+                )
         else:
-            self.logger.debug(f"Ignoring bedrock packet {packet_id}")
+            self.logger.verbose(f"Ignoring bedrock packet {packet_id}")
 
     def _handle_request_network_settings(self, body: bytes) -> None:
         client_protocol = bp.parse_request_network_settings(body)
@@ -200,36 +216,45 @@ class RedirectSession:
             self.disconnect("disconnectionScreen.resourcePack")
 
     def _send_start_game(self) -> None:
-        import asyncio
+        from ..asyncio_runner import shared_runner
+
+        # Bedrock 1.21.20+ requires JigsawStructureData and VoxelShapes packets before StartGame
+        self.peer.send_raw_packet(bp.jigsaw_structure_data())
+        self.peer.send_raw_packet(bp.voxel_shapes())
 
         info = self.server.session_info
         self.peer.send_raw_packet(
             bp.start_game(info.host_name, info.world_name, info.players, info.max_players)
         )
-        self.logger.verbose("StartGame sent, waiting for the client to settle before Transfer...")
+        self.logger.verbose(
+            "StartGame sent, waiting 2 seconds for client to settle (locating server) before Transfer..."
+        )
 
         def send_transfer() -> None:
             if self.peer.closed or self._closed:
+                self.server.logger.warn(
+                    f"2-second timer elapsed, but client already disconnected (peer.closed={self.peer.closed}, session._closed={self._closed})!"
+                )
                 return
-            info = self.server.session_info
             self.peer.send_raw_packet(bp.transfer(info.ip, info.port))
+            display_name = self.identity_data.get("displayName", "?") if self.identity_data else "?"
+            xuid = self.identity_data.get("XUID", "0") if self.identity_data else "0"
             self.server.logger.info(
-                f"Transferred player {self.identity_data.get('displayName', '?')} "
-                f"to server {info.ip}:{info.port}"
+                f"Transferred player {display_name} ({xuid}) to server {info.ip}:{info.port}"
             )
             try:
                 from datetime import datetime, timezone
 
                 self.server.player_history().last_seen(
-                    str(self.identity_data.get("XUID", "0")),
+                    str(xuid),
                     datetime.now(timezone.utc),
                 )
             except (IOError, ValueError):
                 pass
             # Give the client a moment to act on the Transfer, then close
-            asyncio.get_event_loop().call_later(2.0, self._delayed_close)
+            shared_runner().loop.call_later(2.0, self._delayed_close)
 
-        asyncio.get_event_loop().call_later(1.5, send_transfer)
+        shared_runner().loop.call_later(2.0, send_transfer)
 
     def _delayed_close(self) -> None:
         if not self.peer.closed:
@@ -451,6 +476,7 @@ class NetherNetPeer:
         if self.closed:
             return
         self.closed = True
+        self.logger.verbose(f"NetherNet peer {self.connection_id} connection closed")
 
         async def _close() -> None:
             try:

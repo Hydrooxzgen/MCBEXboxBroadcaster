@@ -178,7 +178,10 @@ def create_session() -> None:
         try:
             # Update the session
             session_manager.update_session_with(session_info)
-            session_manager.logger.verbose("Updated session!")
+            if getattr(config, "suppress_session_update_message", False):
+                session_manager.logger.debug("Updated session!")
+            else:
+                session_manager.logger.info("Updated session!")
         except requests.RequestException as ex:
             # Transient Xbox Live hiccups recover on the next cycle
             session_manager.logger.warn(f"Session update hit a network error, will retry: {ex}")
@@ -220,6 +223,8 @@ def update_session_info(session_info: SessionInfo) -> None:
         session_info.world_name = pong.motd
         session_info.players = pong.player_count
         session_info.max_players = pong.maximum_player_count
+        if pong.game_type:
+            session_info.game_mode = pong.game_type
 
         # Fallback to the gamertag if the host name is empty
         if not session_info.host_name:
@@ -233,6 +238,7 @@ def update_session_info(session_info: SessionInfo) -> None:
             session_info.world_name = config.session.session_info.world_name
             session_info.players = config.session.session_info.players
             session_info.max_players = config.session.session_info.max_players
+            session_info.game_mode = config.session.session_info.game_mode
 
             # Fallback to the gamertag if the host name is empty
             if not session_info.host_name:

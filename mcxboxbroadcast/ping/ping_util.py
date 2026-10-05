@@ -47,6 +47,7 @@ class BedrockPong:
     maximum_player_count: int = 0
     protocol_version: int = 0
     version: str = ""
+    game_type: str = "Survival"
     ipv4_port: int = 0
     ipv6_port: int = 0
     nintendo: bool = False
@@ -111,9 +112,10 @@ def _parse_pong(payload: bytes) -> BedrockPong:
         maximum_player_count=_to_int(parts[5]),
         guid=_to_int(parts[6]) or 0,
         sub_motd=parts[7] if len(parts) > 7 else "",
-        ipv4_port=_to_int(parts[8]) if len(parts) > 8 else 0,
-        ipv6_port=_to_int(parts[9]) if len(parts) > 9 else 0,
-        nintendo=len(parts) > 10 and parts[10] == "1",
+        game_type=parts[8] if len(parts) > 8 and parts[8] in ("Survival", "Creative", "Adventure") else "Survival",
+        ipv4_port=_to_int(parts[10]) if len(parts) > 10 else (_to_int(parts[8]) if len(parts) > 8 else 0),
+        ipv6_port=_to_int(parts[11]) if len(parts) > 11 else (_to_int(parts[9]) if len(parts) > 9 else 0),
+        nintendo=len(parts) > 9 and parts[9] == "1",
     )
 
 
@@ -144,7 +146,10 @@ def _web_ping(host: str, port: int, timeout: float) -> BedrockPong:
         maximum_player_count=_to_int(str(pong_data.get("maximumPlayerCount", 0))),
         protocol_version=_to_int(str(pong_data.get("protocolVersion", 0))),
         version=str(pong_data.get("version", "")),
+        game_type=str(pong_data.get("gameType", "Survival")),
         guid=_to_int(str(pong_data.get("guid", 0))),
+        ipv4_port=_to_int(str(pong_data.get("ipv4Port", 0))),
+        ipv6_port=_to_int(str(pong_data.get("ipv6Port", 0))),
     )
 
 

@@ -243,7 +243,7 @@ class CreateSessionRequest(JoinSessionRequest):
                 owner_id=session_info.xuid,
                 rak_net_guid="",
                 world_name=session_info.world_name,
-                world_type="Survival",
+                world_type=getattr(session_info, "game_mode", "Survival"),
                 protocol=session_info.protocol,
                 version=session_info.version,
                 is_editor_world=False,
@@ -337,20 +337,22 @@ class CreateSessionResponse:
 class SocialSummaryResponse:
     target_following_count: int
     target_follower_count: int
-    is_caller_following_target: bool
-    is_target_following_caller: bool
-    has_caller_marked_target_as_favorite: bool
-    has_caller_marked_target_as_known: bool
-    legacy_friend_status: str
-    available_people_slots: int
-    recent_change_count: int
-    watermark: str
+    target_friend_count: int = 0
+    is_caller_following_target: bool = False
+    is_target_following_caller: bool = False
+    has_caller_marked_target_as_favorite: bool = False
+    has_caller_marked_target_as_known: bool = False
+    legacy_friend_status: str = ""
+    available_people_slots: int = 0
+    recent_change_count: int = 0
+    watermark: str = ""
 
     @classmethod
     def from_json(cls, json_data: dict) -> "SocialSummaryResponse":
         return cls(
             target_following_count=json_data.get("targetFollowingCount", -1),
             target_follower_count=json_data.get("targetFollowerCount", -1),
+            target_friend_count=json_data.get("targetFriendCount", 0),
             is_caller_following_target=json_data.get("isCallerFollowingTarget", False),
             is_target_following_caller=json_data.get("isTargetFollowingCaller", False),
             has_caller_marked_target_as_favorite=json_data.get(
@@ -367,7 +369,7 @@ class SocialSummaryResponse:
 
     @classmethod
     def empty(cls) -> "SocialSummaryResponse":
-        return cls(-1, -1, False, False, False, False, "", -1, -1, "")
+        return cls(-1, -1, 0, False, False, False, False, "", -1, -1, "")
 
 
 # ---- friend response models (used by FollowerResponse in Java) ----
@@ -530,6 +532,26 @@ class FriendRequestAcceptResponse:
             xuid=json_data.get("xuid"),
             is_friend=bool(json_data.get("isFriend", False)),
         )
+
+
+@dataclass
+class FriendAddResponse:
+    xuid: str
+    added_date_time_utc: str
+    is_friend: bool
+    friend_request_sent: bool
+
+    @classmethod
+    def from_json(cls, json_data: dict) -> "FriendAddResponse":
+        return cls(
+            xuid=str(json_data.get("xuid", "")),
+            added_date_time_utc=str(json_data.get("addedDateTimeUtc", "")),
+            is_friend=bool(json_data.get("isFriend", False)),
+            friend_request_sent=bool(json_data.get("friendRequestSent", False)),
+        )
+
+
+PeopleResponse = FollowerResponse
 
 
 def _snake(name: str) -> str:

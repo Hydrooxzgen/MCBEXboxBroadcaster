@@ -249,7 +249,7 @@ class SessionManager(SessionManagerCore):
         messages.append("Primary Session:")
         messages.append(f" - Gamertag: {self.get_gamertag()}")
         messages.append(
-            f"   Following: {self.social_summary().target_following_count}/{constants.MAX_FRIENDS}"
+            f"   Friends: {self.social_summary().target_friend_count}/{constants.MAX_FRIENDS}"
         )
 
         if self.sub_session_managers:
@@ -258,7 +258,7 @@ class SessionManager(SessionManagerCore):
                 messages.append(f" - ID: {key}")
                 messages.append(f"   Gamertag: {sub_session.get_gamertag()}")
                 messages.append(
-                    f"   Following: {sub_session.social_summary().target_following_count}/"
+                    f"   Friends: {sub_session.social_summary().target_friend_count}/"
                     f"{constants.MAX_FRIENDS}"
                 )
         else:

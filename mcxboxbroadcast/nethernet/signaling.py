@@ -163,7 +163,11 @@ class FranchiseSignaling:
             "request-id": str(uuid.uuid4()),
         }
         async with websockets.connect(
-            SIGNALING_URL, open_timeout=15, **_ws_connect_kwargs(headers)
+            SIGNALING_URL,
+            open_timeout=15,
+            ping_interval=None,
+            ping_timeout=None,
+            **_ws_connect_kwargs(headers),
         ) as ws:
             if self._closed:
                 return

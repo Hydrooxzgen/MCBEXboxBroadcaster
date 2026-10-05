@@ -42,8 +42,8 @@ FIELD_COMMENT = {
         "is transferred), so this caps concurrent joins, not total players.\n"
         "Leave both at 0 for the OS ephemeral range (default)."
     ),
-    "auto-follow": "Should we automatically follow people that follow us",
-    "auto-unfollow": "Should we automatically unfollow people that no longer follow us",
+    "game-mode": "The game mode to broadcast (Survival, Creative, Adventure)",
+    "auto-friend": "Should we automatically accept friend requests",
     "initial-invite": "Should we automatically send an invite when a friend is added",
     "expiry": "Friend expiry settings",
     "enabled": "Should we unfriend people that haven't joined the server in a while",
@@ -85,34 +85,43 @@ def _snake(name: str) -> str:
     return name.replace("-", "_")
 
 
-def _migrate_v1(data: dict) -> dict:
-    """Apply the v1 -> v2 transformation from Java ConfigLoader.TRANSFORMER."""
-    session = data.setdefault("session", {})
+def _migrate(data: dict) -> dict:
+    """Apply the version transformations matching Java ConfigLoader.TRANSFORMER."""
+    version = data.get("config-version", 1)
 
-    # Extension only settings moved into "session"
-    for key in ("remote-address", "remote-port", "update-interval"):
-        if key in data:
-            session[key] = data.pop(key)
+    if version < 2:
+        session = data.setdefault("session", {})
 
-    # Standalone only renames
-    if "suppress-session-update-info" in data:
-        data["suppress-session-update-message"] = data.pop("suppress-session-update-info")
-    if "debug-log" in data:
-        data["debug-mode"] = data.pop("debug-log")
+        # Extension only settings moved into "session"
+        for key in ("remote-address", "remote-port", "update-interval"):
+            if key in data:
+                session[key] = data.pop(key)
 
-    # Shared renames
-    if "slack-webhook" in data:
-        data["notifications"] = data.pop("slack-webhook")
+        # Standalone only renames
+        if "suppress-session-update-info" in data:
+            data["suppress-session-update-message"] = data.pop("suppress-session-update-info")
+        if "debug-log" in data:
+            data["debug-mode"] = data.pop("debug-log")
 
-    friend_sync = data.setdefault("friend-sync", {})
-    expiry = friend_sync.setdefault("expiry", {})
-    for old, new in (
-        ("should-expire", "enabled"),
-        ("expire-days", "days"),
-        ("expire-check", "check"),
-    ):
-        if old in friend_sync:
-            expiry[new] = friend_sync.pop(old)
+        # Shared renames
+        if "slack-webhook" in data:
+            data["notifications"] = data.pop("slack-webhook")
+
+        friend_sync = data.setdefault("friend-sync", {})
+        expiry = friend_sync.setdefault("expiry", {})
+        for old, new in (
+            ("should-expire", "enabled"),
+            ("expire-days", "days"),
+            ("expire-check", "check"),
+        ):
+            if old in friend_sync:
+                expiry[new] = friend_sync.pop(old)
+
+    if version < 5:
+        friend_sync = data.setdefault("friend-sync", {})
+        if "auto-follow" in friend_sync:
+            friend_sync["auto-friend"] = friend_sync.pop("auto-follow")
+        friend_sync.pop("auto-unfollow", None)
 
     data["config-version"] = constants.CONFIG_VERSION
     return data
@@ -224,7 +233,7 @@ def load_config(config_path: str) -> CoreConfig:
     migrated = False
     if not originally_empty and node:
         if version < constants.CONFIG_VERSION:
-            node = _migrate_v1(node)
+            node = _migrate(node)
             migrated = True
             logger.info(
                 f"Migrated config from version {version} to {constants.CONFIG_VERSION}"

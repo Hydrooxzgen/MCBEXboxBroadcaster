@@ -28,6 +28,7 @@ class SessionInfo:
         max_players: int = 0,
         ip: str = "",
         port: int = 0,
+        game_mode: str = "Survival",
     ) -> None:
         self._host_name = remove_color_codes(host_name)
         self._world_name = remove_color_codes(world_name)
@@ -35,6 +36,7 @@ class SessionInfo:
         self._max_players = int(max_players)
         self._ip = ip
         self._port = int(port)
+        self.game_mode = game_mode if game_mode in ("Survival", "Creative", "Adventure") else "Survival"
 
     @classmethod
     def from_config(cls, config: SessionInfoConfig) -> "SessionInfo":
@@ -45,6 +47,7 @@ class SessionInfo:
             config.max_players,
             config.ip,
             config.port,
+            getattr(config, "game_mode", "Survival"),
         )
 
     @property
@@ -117,6 +120,7 @@ class SessionInfo:
             self._max_players,
             self._ip,
             self._port,
+            self.game_mode,
         )
 
 
@@ -129,6 +133,7 @@ class ExpandedSessionInfo(SessionInfo):
             session_info.max_players,
             session_info.ip,
             session_info.port,
+            session_info.game_mode,
         )
         self.connection_id = connection_id
         self.xuid = xuid
@@ -146,6 +151,7 @@ class ExpandedSessionInfo(SessionInfo):
         self.max_players = session_info.max_players
         self.ip = session_info.ip
         self.port = session_info.port
+        self.game_mode = session_info.game_mode
 
     @property
     def host_name(self) -> str:

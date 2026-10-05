@@ -19,6 +19,7 @@ class SessionInfoConfig:
     max_players: int = 20
     ip: str = "test.geysermc.org"
     port: int = 19132
+    game_mode: str = "Survival"
 
 
 @dataclass
@@ -50,8 +51,7 @@ class ExpiryConfig:
 @dataclass
 class FriendSyncConfig:
     update_interval: int = 60
-    auto_follow: bool = True
-    auto_unfollow: bool = True
+    auto_friend: bool = True
     initial_invite: bool = True
     expiry: ExpiryConfig = field(default_factory=ExpiryConfig)
 

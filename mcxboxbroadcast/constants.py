@@ -22,7 +22,10 @@ PEOPLE = "https://social.xboxlive.com/users/me/people/xuid(%s)"
 USER_PRESENCE = "https://userpresence.xboxlive.com/users/xuid(%s)/devices/current/titles/current"
 FOLLOWERS = "https://peoplehub.xboxlive.com/users/me/people/followers"
 SOCIAL = "https://peoplehub.xboxlive.com/users/me/people/social"
+FRIENDS = "https://peoplehub.xboxlive.com/users/me/people/friends"
+FRIEND_REQUESTS = "https://peoplehub.xboxlive.com/users/me/people/friendrequests(received)"
 SOCIAL_SUMMARY = "https://social.xboxlive.com/users/me/summary"
+FRIEND = "https://social.xboxlive.com/users/me/people/friends/v2/xuid(%s)"
 FOLLOWER = "https://social.xboxlive.com/users/me/people/follower/xuid(%s)"
 
 GALLERY = "https://persona.franchise.minecraft-services.net/api/v1.0/gallery"
@@ -33,12 +36,12 @@ WEBSOCKET_CONNECTION_TIMEOUT = 10.0  # seconds
 # https://github.com/LiteLDev/LeviLamina/blob/main/src/mc/network/ConnectionType.h
 CONNECTION_TYPE_JSON_RPC = 7
 
-# Used to be 1000, but the limit was increased in Aug 2024
-MAX_FRIENDS = 2000
+# Maximum friends count supported by Xbox Live
+MAX_FRIENDS = 1000
 
-# Bedrock protocol targeted by the micro nethernet server (1.26.45)
-PROTOCOL_VERSION = 2169
-MINECRAFT_VERSION = "1.26.45"
+# Bedrock protocol targeted by the micro nethernet server (1.26.50 / protocol 2193)
+PROTOCOL_VERSION = 2193
+MINECRAFT_VERSION = "1.26.50"
 
 # Config version for upgrade purposes
-CONFIG_VERSION = 2
+CONFIG_VERSION = 5

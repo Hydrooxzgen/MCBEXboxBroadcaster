@@ -89,6 +89,8 @@ class RtaWebsocketClient:
             async with websockets.connect(
                 constants.RTA_WEBSOCKET,
                 open_timeout=constants.WEBSOCKET_CONNECTION_TIMEOUT,
+                ping_interval=None,
+                ping_timeout=None,
                 **_ws_connect_kwargs(headers),
             ) as ws:
                 if self._closed:

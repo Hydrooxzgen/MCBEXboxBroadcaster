@@ -104,15 +104,9 @@ class SessionManagerCore:
             self.shutdown()
             return
 
-        friend_count = -1
-        try:
-            friend_count = len(self.friend_manager_.get())
-        except Exception:
-            pass
-
         self.logger.info(
             f"Successfully authenticated as {self.get_gamertag()} ({self.get_xuid()}) "
-            f"with {friend_count}/{constants.MAX_FRIENDS} friends"
+            f"with {self.social_summary().target_friend_count}/{constants.MAX_FRIENDS} friends"
         )
 
         if self.handle_friendship():

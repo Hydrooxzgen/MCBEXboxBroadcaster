@@ -33,6 +33,8 @@ PACKET_TRANSFER = 85
 PACKET_CLIENT_CACHE_STATUS = 129
 PACKET_NETWORK_SETTINGS = 143
 PACKET_REQUEST_NETWORK_SETTINGS = 193
+PACKET_JIGSAW_STRUCTURE_DATA = 313
+PACKET_VOXEL_SHAPES = 337
 
 # PlayStatus enum ordinals
 PLAY_STATUS_LOGIN_SUCCESS = 0
@@ -375,6 +377,42 @@ def start_game(
     write_string(buf, "")  # ownerId
 
     return encode_packet_body(PACKET_START_GAME, bytes(buf))
+
+
+def jigsaw_structure_data() -> bytes:
+    """JigsawStructureDataPacket (id 313) sent prior to StartGame in Bedrock 1.21.20+.
+
+    Matches CloudburstMC NbtMap with empty processors, template_pools, jigsaws, structure_sets.
+    """
+    # Network NBT Compound with:
+    # TAG_List(0x09) "jigsaws" (empty: tag_type=0, len=0)
+    # TAG_List(0x09) "structure_sets" (empty: tag_type=0, len=0)
+    # TAG_List(0x09) "processors" (empty: tag_type=0, len=0)
+    # TAG_List(0x09) "template_pools" (empty: tag_type=0, len=0)
+    # TAG_End(0x00)
+    nbt_data = bytes.fromhex(
+        "0a00"
+        "09076a6967736177730000"
+        "090e7374727563747572655f736574730000"
+        "090a70726f636573736f72730000"
+        "090e74656d706c6174655f706f6f6c730000"
+        "00"
+    )
+    return encode_packet_body(PACKET_JIGSAW_STRUCTURE_DATA, nbt_data)
+
+
+def voxel_shapes() -> bytes:
+    """VoxelShapesPacket (id 337) sent prior to StartGame in Bedrock 1.21.20+.
+
+    Shapes count = 0 (varuint 0)
+    NameMap size = 0 (varuint 0)
+    CustomShapeCount = 0 (short LE 0)
+    """
+    buf = bytearray()
+    write_varuint(buf, 0)  # shapes count
+    write_varuint(buf, 0)  # name map size
+    buf += struct.pack("<H", 0)  # custom shape count (unsigned short LE)
+    return encode_packet_body(PACKET_VOXEL_SHAPES, bytes(buf))
 
 
 # ------------------------------------------------------- inbound deserializers
